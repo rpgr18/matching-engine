@@ -105,6 +105,29 @@ class ReferenceBook {
     rest(side, price, o);
   }
 
+  void insert(const NewOrder& o) {
+    if (o.id == 0) return reject(o.id, RejectReason::InvalidOrderId);
+    if (o.qty == 0) return reject(o.id, RejectReason::InvalidQuantity);
+    if (o.type != OrderType::Limit) return reject(o.id, RejectReason::InvalidOrderType);
+    if (!in_band(o.price)) return reject(o.id, RejectReason::PriceOutOfBand);
+    if (where_.contains(o.id)) return reject(o.id, RejectReason::DuplicateOrderId);
+    if (where_.size() >= cfg_.max_orders) return reject(o.id, RejectReason::BookFull);
+    emit(Event::accept(o.id));
+    rest(o.side, o.price, Ord{o.id, o.qty, o.owner, o.post_only});
+  }
+
+  void reduce(OrderId id, Qty qty) {
+    const auto it = where_.find(id);
+    if (it == where_.end()) return reject(id, RejectReason::UnknownOrder);
+    if (qty == 0) return reject(id, RejectReason::InvalidQuantity);
+    const auto [side, price] = it->second;
+    const auto pos = find_in(side_of(side)[price], id);
+    if (qty >= pos->qty) return cancel(id);
+    pos->qty -= qty;
+    emit(Event::modify(id, price, pos->qty));
+    report(side, price);
+  }
+
   // ---- Snapshot ----
 
   [[nodiscard]] std::vector<Resting> resting(Side side) const {

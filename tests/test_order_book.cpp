@@ -422,6 +422,58 @@ TYPED_TEST(OrderBookTest, PostOnlyRequiresARestingOrderType) {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Mirroring (insert / reduce)
+
+TYPED_TEST(OrderBookTest, InsertRestsWithoutMatchingEvenWhenCrossed) {
+  this->submit(sell(1, 100, 5));
+  this->book.insert(buy(2, 101, 7));
+  EXPECT_EQ(this->rec.take(), (Events{E::accept(2), E::level(Side::Buy, 101, 7, 1)}));
+  EXPECT_EQ(this->book.best_bid(), 101);
+  EXPECT_EQ(this->book.best_ask(), 100) << "a mirrored book may be crossed";
+  EXPECT_EQ(this->book.order_count(), 2u);
+}
+
+TYPED_TEST(OrderBookTest, InsertJoinsTheBackOfTheQueue) {
+  this->book.insert(sell(1, 100, 5));
+  this->book.insert(sell(2, 100, 3));
+  EXPECT_EQ(resting(this->book, Side::Sell), (std::vector<Resting>{{1, 100, 5}, {2, 100, 3}}));
+}
+
+TYPED_TEST(OrderBookTest, InsertValidatesLikeAdd) {
+  this->submit(buy(1, 100, 5));
+  this->rec.take();
+  NewOrder m = market(2, Side::Buy, 5);
+  this->book.insert(m);
+  this->book.insert(buy(1, 100, 5));
+  this->book.insert(buy(3, 5000, 5));
+  this->book.insert(buy(4, 100, 0));
+  EXPECT_EQ(this->rec.take(), (Events{E::reject(2, RejectReason::InvalidOrderType),
+                                      E::reject(1, RejectReason::DuplicateOrderId),
+                                      E::reject(3, RejectReason::PriceOutOfBand),
+                                      E::reject(4, RejectReason::InvalidQuantity)}));
+}
+
+TYPED_TEST(OrderBookTest, ReduceKeepsPriorityAndRemovesAtZero) {
+  this->submit(sell(1, 100, 10));
+  this->submit(sell(2, 100, 10));
+  this->rec.take();
+  this->book.reduce(1, 4);
+  EXPECT_EQ(this->rec.take(),
+            (Events{E::modify(1, 100, 6), E::level(Side::Sell, 100, 16, 2)}));
+  EXPECT_EQ(resting(this->book, Side::Sell), (std::vector<Resting>{{1, 100, 6}, {2, 100, 10}}));
+  this->book.reduce(1, 6);
+  EXPECT_EQ(this->rec.take(), (Events{E::cancel(1, 6, CancelReason::Requested),
+                                      E::level(Side::Sell, 100, 10, 1)}));
+  this->book.reduce(2, 99);  // more than is open: the order goes
+  EXPECT_FALSE(this->book.best_ask());
+  this->rec.take();
+  this->book.reduce(2, 1);
+  this->book.reduce(3, 0);
+  EXPECT_EQ(this->rec.take(), (Events{E::reject(2, RejectReason::UnknownOrder),
+                                      E::reject(3, RejectReason::UnknownOrder)}));
+}
+
+// ---------------------------------------------------------------------------------------------
 // Validation
 
 TYPED_TEST(OrderBookTest, RejectsInvalidRequests) {

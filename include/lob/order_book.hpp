@@ -101,6 +101,36 @@ class OrderBook {
     }
   }
 
+  // ---- Mirroring another venue's book (see itch.hpp). ----
+  //
+  // A feed handler rebuilds an exchange's book from its market-by-order feed. It must reproduce
+  // the book exactly as reported, not re-match it: real books lock and cross during auctions and
+  // halts, and the exchange reports executions separately. These two operations rest and shrink
+  // orders without ever matching.
+
+  /// Rests an order at its price, at the back of its level, without matching, even if it locks
+  /// or crosses the opposite side. Only limit orders can rest; time in force is ignored.
+  void insert(const NewOrder& order) {
+    if (order.side == Side::Buy) {
+      insert_impl<Side::Buy>(order);
+    } else {
+      insert_impl<Side::Sell>(order);
+    }
+  }
+
+  /// Removes `qty` from a resting order's open quantity without changing its queue position, as
+  /// an execution or partial cancel does, and removes the order if nothing is left.
+  void reduce(OrderId id, Qty qty) {
+    const OrderIdx idx = lookup(id);
+    if (idx == kNil) return listener_.on_reject(id, RejectReason::UnknownOrder);
+    if (qty == 0) return listener_.on_reject(id, RejectReason::InvalidQuantity);
+    if (pool_[idx].side == Side::Buy) {
+      reduce_impl<Side::Buy>(idx, qty);
+    } else {
+      reduce_impl<Side::Sell>(idx, qty);
+    }
+  }
+
   // ---- Software-pipelining hooks for batch processing (see replay.hpp). ----
   //
   // Each starts memory accesses a later request will need and changes no state. They are meant
@@ -463,6 +493,33 @@ class OrderBook {
     listener_.on_cancel(id, qty, CancelReason::Requested);
     listener_.on_level(S, px, lvl.total, lvl.count);
     if (lvl.count == 0) lad.erase(px);
+  }
+
+  template <Side S>
+  void insert_impl(const NewOrder& o) {
+    if (o.id == 0) return listener_.on_reject(o.id, RejectReason::InvalidOrderId);
+    if (o.qty == 0) return listener_.on_reject(o.id, RejectReason::InvalidQuantity);
+    if (o.type != OrderType::Limit) return listener_.on_reject(o.id, RejectReason::InvalidOrderType);
+    if (!in_band(o.price)) return listener_.on_reject(o.id, RejectReason::PriceOutOfBand);
+    if (index_.contains(o.id)) return listener_.on_reject(o.id, RejectReason::DuplicateOrderId);
+    if (pool_.full()) return listener_.on_reject(o.id, RejectReason::BookFull);
+    listener_.on_accept(o.id);
+    const OrderIdx idx = pool_.allocate();
+    const std::uint8_t flags = o.post_only ? order_flags::kPostOnly : 0;
+    pool_[idx] = Order{o.id, o.price, o.qty, kNil, kNil, o.owner, S, flags};
+    index_.insert(o.id, idx);
+    rest<S>(idx);
+  }
+
+  template <Side S>
+  void reduce_impl(OrderIdx idx, Qty qty) {
+    Order& o = pool_[idx];
+    if (qty >= o.qty) return cancel_impl<S>(idx);
+    Level& lvl = ladder<S>().at(o.price);
+    o.qty -= qty;
+    lvl.total -= qty;
+    listener_.on_modify(o.id, o.price, o.qty);
+    listener_.on_level(S, o.price, lvl.total, lvl.count);
   }
 
   template <Side S>

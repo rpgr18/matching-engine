@@ -39,9 +39,11 @@ struct Scenario {
   Price outliers;  ///< ...except occasional prices anywhere in [min - outliers, max + outliers].
   OwnerId owners;  ///< Owner ids are drawn from [0, owners].
   std::uint64_t ops;
+  /// Mostly feed-handler operations (insert, reduce), which may lock or cross the book.
+  bool mirror = false;
 };
 
-enum class OpKind { Add, Cancel, Modify };
+enum class OpKind { Add, Cancel, Modify, Insert, Reduce };
 
 struct Op {
   OpKind kind;
@@ -64,6 +66,13 @@ struct Op {
       case OpKind::Modify:
         os << "modify id=" << id << ' ' << qty << '@' << price;
         break;
+      case OpKind::Insert:
+        os << "insert id=" << order.id << ' ' << to_string(order.side) << ' ' << order.qty << '@'
+           << order.price << ' ' << to_string(order.type);
+        break;
+      case OpKind::Reduce:
+        os << "reduce id=" << id << " by " << qty;
+        break;
     }
     return os.str();
   }
@@ -77,6 +86,20 @@ class OpGenerator {
   OpGenerator(const Scenario& s, std::uint64_t seed) : s_(s), rng_(seed) {}
 
   Op next() {
+    if (s_.mirror && !recent_.empty()) {
+      const auto roll = below(100);
+      if (roll < 45) {
+        Op op = add();
+        op.kind = OpKind::Insert;
+        return op;
+      }
+      if (roll < 70) {
+        const Qty qty = chance(3) ? 0 : static_cast<Qty>(1 + below(15));
+        return Op{OpKind::Reduce, {}, pick_id(), 0, qty};
+      }
+      if (roll < 90) return Op{OpKind::Cancel, {}, pick_id(), 0, 0};
+      // fall through: occasional matching requests against a possibly crossed book
+    }
     const auto roll = below(100);
     if (roll < 55 || recent_.empty()) return add();
     if (roll < 80) return Op{OpKind::Cancel, {}, pick_id(), 0, 0};
@@ -189,6 +212,14 @@ Coverage run(const Scenario& s, std::uint64_t seed) {
         book.modify(op.id, op.price, op.qty);
         ref.modify(op.id, op.price, op.qty);
         break;
+      case OpKind::Insert:
+        book.insert(op.order);
+        ref.insert(op.order);
+        break;
+      case OpKind::Reduce:
+        book.reduce(op.id, op.qty);
+        ref.reduce(op.id, op.qty);
+        break;
     }
 
     EXPECT_EQ(rec.events, expected) << s.name << " seed=" << seed << " step=" << step << ": "
@@ -198,10 +229,10 @@ Coverage run(const Scenario& s, std::uint64_t seed) {
     rec.events.clear();
     expected.clear();
 
-    // The book must never be left crossed.
+    // A matching book must never be left crossed; a mirrored one may be.
     const auto bid = book.best_bid();
     const auto ask = book.best_ask();
-    EXPECT_TRUE(!bid || !ask || *bid < *ask) << "crossed at step " << step;
+    if (!s.mirror) EXPECT_TRUE(!bid || !ask || *bid < *ask) << "crossed at step " << step;
 
     if (step % 64 == 0 || step + 1 == ops) {
       EXPECT_EQ(resting(book, Side::Buy), ref.resting(Side::Buy)) << "step " << step;
@@ -215,7 +246,7 @@ Coverage run(const Scenario& s, std::uint64_t seed) {
     if (::testing::Test::HasFailure()) return cov;
   }
   // Guard against a generator that silently stops exercising the matching path.
-  EXPECT_GT(cov.trades, ops / 20) << s.name;
+  if (!s.mirror) EXPECT_GT(cov.trades, ops / 20) << s.name;
   return cov;
 }
 
@@ -256,6 +287,14 @@ TYPED_TEST(Differential, DeepBook) {
   const Scenario s{"deep", make_config(1, 400, 4000, StpMode::CancelResting), 200, 40, 10, 50,
                    60'000};
   run<TypeParam>(s, env_or("LOB_FUZZ_SEED", 1) + 100);
+}
+
+/// Feed-handler operations: orders are inserted and reduced as an exchange reports them, so the
+/// book locks and crosses freely, with occasional matching requests mixed in.
+TYPED_TEST(Differential, MirroredBookMayCross) {
+  Scenario s{"mirror", make_config(1, 64, 200, StpMode::None), 32, 8, 3, 2, 60'000};
+  s.mirror = true;
+  run<TypeParam>(s, env_or("LOB_FUZZ_SEED", 1) + 300);
 }
 
 /// A wide band with a sparse book: the dense ladder's bitset has to climb several layers to find

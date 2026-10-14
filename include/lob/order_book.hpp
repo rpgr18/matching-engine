@@ -8,6 +8,7 @@
 #include <stdexcept>
 #include <vector>
 
+#include "lob/command.hpp"
 #include "lob/dense_ladder.hpp"
 #include "lob/flat_order_map.hpp"
 #include "lob/messages.hpp"
@@ -98,6 +99,44 @@ class OrderBook {
     } else {
       modify_impl<Side::Sell>(idx, price, qty);
     }
+  }
+
+  // ---- Software-pipelining hooks for batch processing (see replay.hpp). ----
+  //
+  // Each starts memory accesses a later request will need and changes no state. They are meant
+  // to be issued for the same request in order, a few requests apart, so that every stage's
+  // input has arrived in cache by the time the stage reads it. The book can change between
+  // stages, so every input is re-validated; a stale hint only wastes a fetch.
+
+  /// Stage 0: fetch the index slot the request's id hashes to (a new order probes it for
+  /// duplicates and may insert there).
+  void prefetch_slot(const Command& c) const noexcept {
+    if (c.id != 0) index_.prefetch(c.id);
+  }
+
+  /// Stage 1: look the id up (cheap once stage 0 has landed), fetch the resting order, and
+  /// return its slot for stage 2. New orders skip this stage.
+  [[nodiscard]] OrderIdx prefetch_order(const Command& c) const noexcept {
+    if (c.type == CommandType::Add) return kNil;
+    const OrderIdx idx = lookup(c.id);
+    if (idx != kNil) __builtin_prefetch(&pool_[idx]);
+    return idx;
+  }
+
+  /// Stage 2: read the order (cheap once stage 1 has landed) and fetch its queue neighbours and
+  /// price level; for a new order, fetch the level at its limit price.
+  void prefetch_neighbours(const Command& c, OrderIdx idx) const noexcept {
+    if (c.type == CommandType::Add) {
+      prefetch_level(c.side, c.price);
+      return;
+    }
+    if (idx >= pool_.capacity()) return;
+    const Order& o = pool_[idx];
+    if (o.id != c.id) return;  // gone, or the slot was reused since stage 1
+    if (o.prev < pool_.capacity()) __builtin_prefetch(&pool_[o.prev]);
+    if (o.next < pool_.capacity()) __builtin_prefetch(&pool_[o.next]);
+    prefetch_level(o.side, o.price);
+    if (c.type == CommandType::Modify && c.price != o.price) prefetch_level(o.side, c.price);
   }
 
   // ---- Queries. None of these are on the matching path. ----
@@ -213,6 +252,14 @@ class OrderBook {
 
   [[nodiscard]] OrderIdx lookup(OrderId id) const noexcept {
     return id == 0 ? kNil : index_.find(id);
+  }
+
+  void prefetch_level(Side side, Price price) const noexcept {
+    if (side == Side::Buy) {
+      bids_.prefetch(price);
+    } else {
+      asks_.prefetch(price);
+    }
   }
 
   template <Side S>

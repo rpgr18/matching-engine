@@ -28,6 +28,7 @@ add_executable(lob_tests
   test_ladders.cpp
   test_order_book.cpp
   test_order_pool.cpp
+  test_replay.cpp
   test_self_trade.cpp
   test_spsc_queue.cpp
   test_types.cpp

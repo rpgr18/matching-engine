@@ -51,6 +51,9 @@ class MapLadder {
   void erase(Price p) noexcept { levels_.erase(p); }
   void erase_best() noexcept { levels_.erase(levels_.begin()); }
 
+  /// Tree nodes cannot be located without walking the tree, so there is nothing to prefetch.
+  void prefetch(Price) const noexcept {}
+
   template <class F>
   void for_each(F&& f) const {
     for (const auto& [price, level] : levels_)

@@ -32,6 +32,7 @@
 #include "lob/latency_histogram.hpp"
 #include "lob/map_ladder.hpp"
 #include "lob/order_book.hpp"
+#include "lob/replay.hpp"
 #include "lob/std_order_map.hpp"
 #include "lob/vector_ladder.hpp"
 #include "lob/workload.hpp"
@@ -111,7 +112,27 @@ struct ImplResult {
   std::exit(1);
 }
 
-template <class Traits>
+ReplayOptions replay_options() {
+  ReplayOptions o;
+  // For tuning: LOB_PREFETCH="slot,order,neighbour[,min_orders]".
+  if (const char* v = std::getenv("LOB_PREFETCH")) {
+    std::sscanf(v, "%td,%td,%td,%zu", &o.slot_distance, &o.order_distance,
+                &o.neighbour_distance, &o.min_orders);
+  }
+  return o;
+}
+
+/// Plain request-at-a-time replay, or the software-pipelined batch replay.
+template <bool Pipelined, class Book>
+void replay_all(Book& book, const Command* begin, const Command* end, const ReplayOptions& o) {
+  if constexpr (Pipelined) {
+    replay(book, begin, end, o);
+  } else {
+    for (const Command* c = begin; c != end; ++c) apply(book, *c);
+  }
+}
+
+template <class Traits, bool Pipelined = false>
 ImplResult run_impl(const std::string& name, const Workload& w, const Options& opt) {
   using Book = OrderBook<CountingListener, Traits>;
   ImplResult r;
@@ -121,6 +142,7 @@ ImplResult run_impl(const std::string& name, const Workload& w, const Options& o
   const Command* begin = first + w.prefill;
   const Command* end = first + w.commands.size();
   const auto n = static_cast<double>(end - begin);
+  const ReplayOptions ropt = replay_options();
 
   std::vector<double> seconds;
   for (int rep = 0; rep <= opt.reps; ++rep) {
@@ -130,7 +152,7 @@ ImplResult run_impl(const std::string& name, const Workload& w, const Options& o
     listener = CountingListener{};
 
     const auto t0 = std::chrono::steady_clock::now();
-    for (const Command* c = begin; c != end; ++c) apply(*book, *c);
+    replay_all<Pipelined>(*book, begin, end, ropt);
     const auto t1 = std::chrono::steady_clock::now();
     bench::keep(listener.hash);
 
@@ -154,6 +176,17 @@ ImplResult run_impl(const std::string& name, const Workload& w, const Options& o
     for (const Command* c = begin; c != end; ++c) {
       const std::uint64_t trades_before = listener.trades;
       const std::uint64_t t0 = clock::now();
+      if constexpr (Pipelined) {
+        // The lookahead replay() issues, timed together with the request it precedes.
+        if (book->order_count() >= ropt.min_orders) {
+          if (end - c > ropt.slot_distance) book->prefetch_slot(c[ropt.slot_distance]);
+          if (end - c > ropt.order_distance)
+            (void)book->prefetch_order(c[ropt.order_distance]);
+          if (end - c > ropt.neighbour_distance)
+            book->prefetch_neighbours(c[ropt.neighbour_distance],
+                                      book->prefetch_order(c[ropt.neighbour_distance]));
+        }
+      }
       apply(*book, *c);
       const std::uint64_t t1 = clock::now();
       const std::uint64_t dt = t1 - t0;
@@ -181,6 +214,8 @@ std::vector<Impl> all_impls() {
   return {
       {"dense+flat", "dense tick ladder, flat open-addressing index (default)",
        run_impl<DenseBookTraits>},
+      {"dense+flat+pf", "dense+flat, batch replay with software-pipelined prefetch",
+       run_impl<DenseBookTraits, true>},
       {"vector+flat", "sorted vector ladder, flat index", run_impl<VectorBookTraits>},
       {"map+flat", "std::map ladder, flat index", run_impl<MapBookTraits>},
       {"dense+std", "dense tick ladder, std::unordered_map index", run_impl<DenseStdIndexTraits>},

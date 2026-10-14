@@ -79,6 +79,13 @@ class DenseLadder {
 
   void erase_best() noexcept { erase(best_price()); }
 
+  /// Starts fetching the level for `p`. A hint only; any price is safe.
+  void prefetch(Price p) const noexcept {
+    if (p < min_) return;
+    const std::uint64_t i = static_cast<std::uint64_t>(p) - static_cast<std::uint64_t>(min_);
+    if (i < levels_.size()) __builtin_prefetch(&levels_[i]);
+  }
+
   /// Visits populated levels from best to worst while `f(price, level)` returns true.
   template <class F>
   void for_each(F&& f) const {

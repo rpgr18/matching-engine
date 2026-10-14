@@ -70,6 +70,9 @@ class VectorLadder {
 
   void erase_best() noexcept { levels_.pop_back(); }
 
+  /// Finding a level means searching, which is the access a prefetch would try to hide.
+  void prefetch(Price) const noexcept {}
+
   template <class F>
   void for_each(F&& f) const {
     for (auto it = levels_.rbegin(); it != levels_.rend(); ++it)

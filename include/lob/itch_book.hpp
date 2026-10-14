@@ -29,6 +29,7 @@ namespace lob::itch {
 /// What a feed needs from the books that mirror it.
 struct Capacity {
   std::vector<std::uint32_t> peak_orders;  ///< Indexed by stock locate.
+  std::vector<std::uint64_t> messages;     ///< Order messages per stock locate.
   std::uint64_t live_at_end = 0;
   std::uint64_t unknown_refs = 0;  ///< Order messages for references never added.
 };
@@ -41,11 +42,24 @@ class CapacityScanner : public NullHandler {
 
   CapacityScanner() { live_.reserve(1u << 20); }
 
-  void on_add(const AddOrder& m) { open(m.h.locate, m.ref, m.shares); }
-  void on_executed(const OrderExecuted& m) { shrink(m.ref, m.shares); }
-  void on_cancel(const OrderCancel& m) { shrink(m.ref, m.shares); }
-  void on_delete(const OrderDelete& m) { shrink(m.ref, ~std::uint32_t{0}); }
+  void on_add(const AddOrder& m) {
+    count(m.h.locate);
+    open(m.h.locate, m.ref, m.shares);
+  }
+  void on_executed(const OrderExecuted& m) {
+    count(m.h.locate);
+    shrink(m.ref, m.shares);
+  }
+  void on_cancel(const OrderCancel& m) {
+    count(m.h.locate);
+    shrink(m.ref, m.shares);
+  }
+  void on_delete(const OrderDelete& m) {
+    count(m.h.locate);
+    shrink(m.ref, ~std::uint32_t{0});
+  }
   void on_replace(const OrderReplace& m) {
+    count(m.h.locate);
     const auto it = live_.find(m.old_ref);
     if (it == live_.end()) {
       ++result.unknown_refs;
@@ -61,11 +75,21 @@ class CapacityScanner : public NullHandler {
  private:
   using Live = std::unordered_map<std::uint64_t, std::pair<std::uint16_t, std::uint32_t>>;
 
-  void open(std::uint16_t locate, std::uint64_t ref, std::uint32_t shares) {
+  void grow(std::uint16_t locate) {
     if (result.peak_orders.size() <= locate) {
       result.peak_orders.resize(locate + std::size_t{1}, 0);
+      result.messages.resize(locate + std::size_t{1}, 0);
       count_.resize(locate + std::size_t{1}, 0);
     }
+  }
+
+  void count(std::uint16_t locate) {
+    grow(locate);
+    ++result.messages[locate];
+  }
+
+  void open(std::uint16_t locate, std::uint64_t ref, std::uint32_t shares) {
+    grow(locate);
     if (!live_.emplace(ref, std::make_pair(locate, shares)).second) return;
     if (++count_[locate] > result.peak_orders[locate]) result.peak_orders[locate] = count_[locate];
   }

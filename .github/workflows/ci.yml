@@ -41,6 +41,7 @@ jobs:
           ./build/bench/lob_pipeline --requests 200000 --rates 1e6,max
           ./build/tools/lob_shell < examples/session.txt > /dev/null
           ./build/tools/lob_replay gen sweep-heavy 100000 smoke.bin && ./build/tools/lob_replay run smoke.bin
+          ./build/tools/lob_itch synth smoke.itch --symbols 4 --requests 50000 && ./build/tools/lob_itch replay smoke.itch --book both --top 4
 
   sanitizers:
     name: ${{ matrix.name }}

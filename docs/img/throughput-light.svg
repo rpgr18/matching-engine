@@ -1,0 +1,117 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="928" height="504" viewBox="0 0 928 504" role="img" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+<title>Order book throughput by storage design</title><desc>Median million requests per second for each workload and storage design; the dense ladder with the flat index is this project&#x27;s design.</desc>
+<text x="0.0" y="18.0" fill="#0b0b0b" font-size="15" text-anchor="start" font-weight="600">Throughput, million requests per second (single core, median of 5 replays)</text>
+<text x="0.0" y="38.0" fill="#52514e" font-size="12" text-anchor="start" font-weight="normal">Apple M2 Pro · clang 21.0.0 · higher is better</text>
+<text x="0.0" y="74.0" fill="#0b0b0b" font-size="13" text-anchor="start" font-weight="600">balanced</text>
+<text x="446.0" y="74.0" fill="#52514e" font-size="12" text-anchor="end" font-weight="normal">4.2k resting orders</text>
+<line x1="202.0" y1="84" x2="202.0" y2="226" stroke="#e4e3df"/>
+<text x="202.0" y="240.0" fill="#8a8984" font-size="11" text-anchor="middle" font-weight="normal">0</text>
+<line x1="268.7" y1="84" x2="268.7" y2="226" stroke="#e4e3df"/>
+<text x="268.7" y="240.0" fill="#8a8984" font-size="11" text-anchor="middle" font-weight="normal">20</text>
+<line x1="335.3" y1="84" x2="335.3" y2="226" stroke="#e4e3df"/>
+<text x="335.3" y="240.0" fill="#8a8984" font-size="11" text-anchor="middle" font-weight="normal">40</text>
+<line x1="402.0" y1="84" x2="402.0" y2="226" stroke="#e4e3df"/>
+<text x="402.0" y="240.0" fill="#8a8984" font-size="11" text-anchor="middle" font-weight="normal">60</text>
+<text x="192.0" y="100.0" fill="#52514e" font-size="12" text-anchor="end" font-weight="normal">dense ladder + flat index</text>
+<path d="M202.0,88.0 h183.3 a4.0,4.0 0 0 1 4.0,4.0 v7.0 a4.0,4.0 0 0 1 -4.0,4.0 h-183.3 z" fill="#2a78d6"/>
+<text x="395.3" y="100.0" fill="#0b0b0b" font-size="12" text-anchor="start" font-weight="600">56.2</text>
+<text x="192.0" y="123.0" fill="#52514e" font-size="12" text-anchor="end" font-weight="normal">  + prefetching replay</text>
+<path d="M202.0,111.0 h183.3 a4.0,4.0 0 0 1 4.0,4.0 v7.0 a4.0,4.0 0 0 1 -4.0,4.0 h-183.3 z" fill="#2a78d6"/>
+<text x="395.3" y="123.0" fill="#0b0b0b" font-size="12" text-anchor="start" font-weight="600">56.2</text>
+<text x="192.0" y="146.0" fill="#52514e" font-size="12" text-anchor="end" font-weight="normal">sorted vector + flat index</text>
+<path d="M202.0,134.0 h113.8 a4.0,4.0 0 0 1 4.0,4.0 v7.0 a4.0,4.0 0 0 1 -4.0,4.0 h-113.8 z" fill="#b9b8b1"/>
+<text x="325.8" y="146.0" fill="#52514e" font-size="12" text-anchor="start" font-weight="normal">35.4</text>
+<text x="192.0" y="169.0" fill="#52514e" font-size="12" text-anchor="end" font-weight="normal">std::map + flat index</text>
+<path d="M202.0,157.0 h97.0 a4.0,4.0 0 0 1 4.0,4.0 v7.0 a4.0,4.0 0 0 1 -4.0,4.0 h-97.0 z" fill="#b9b8b1"/>
+<text x="309.0" y="169.0" fill="#52514e" font-size="12" text-anchor="start" font-weight="normal">30.3</text>
+<text x="192.0" y="192.0" fill="#52514e" font-size="12" text-anchor="end" font-weight="normal">dense ladder + unordered_map</text>
+<path d="M202.0,180.0 h80.2 a4.0,4.0 0 0 1 4.0,4.0 v7.0 a4.0,4.0 0 0 1 -4.0,4.0 h-80.2 z" fill="#b9b8b1"/>
+<text x="292.2" y="192.0" fill="#52514e" font-size="12" text-anchor="start" font-weight="normal">25.3</text>
+<text x="192.0" y="215.0" fill="#52514e" font-size="12" text-anchor="end" font-weight="normal">std::map + unordered_map</text>
+<path d="M202.0,203.0 h56.2 a4.0,4.0 0 0 1 4.0,4.0 v7.0 a4.0,4.0 0 0 1 -4.0,4.0 h-56.2 z" fill="#b9b8b1"/>
+<text x="268.2" y="215.0" fill="#52514e" font-size="12" text-anchor="start" font-weight="normal">18.1</text>
+<text x="482.0" y="74.0" fill="#0b0b0b" font-size="13" text-anchor="start" font-weight="600">cancel-heavy</text>
+<text x="928.0" y="74.0" fill="#52514e" font-size="12" text-anchor="end" font-weight="normal">2.0k resting orders</text>
+<line x1="684.0" y1="84" x2="684.0" y2="226" stroke="#e4e3df"/>
+<text x="684.0" y="240.0" fill="#8a8984" font-size="11" text-anchor="middle" font-weight="normal">0</text>
+<line x1="750.7" y1="84" x2="750.7" y2="226" stroke="#e4e3df"/>
+<text x="750.7" y="240.0" fill="#8a8984" font-size="11" text-anchor="middle" font-weight="normal">20</text>
+<line x1="817.3" y1="84" x2="817.3" y2="226" stroke="#e4e3df"/>
+<text x="817.3" y="240.0" fill="#8a8984" font-size="11" text-anchor="middle" font-weight="normal">40</text>
+<line x1="884.0" y1="84" x2="884.0" y2="226" stroke="#e4e3df"/>
+<text x="884.0" y="240.0" fill="#8a8984" font-size="11" text-anchor="middle" font-weight="normal">60</text>
+<text x="674.0" y="100.0" fill="#52514e" font-size="12" text-anchor="end" font-weight="normal">dense ladder + flat index</text>
+<path d="M684.0,88.0 h190.7 a4.0,4.0 0 0 1 4.0,4.0 v7.0 a4.0,4.0 0 0 1 -4.0,4.0 h-190.7 z" fill="#2a78d6"/>
+<text x="884.7" y="100.0" fill="#0b0b0b" font-size="12" text-anchor="start" font-weight="600">58.4</text>
+<text x="674.0" y="123.0" fill="#52514e" font-size="12" text-anchor="end" font-weight="normal">  + prefetching replay</text>
+<path d="M684.0,111.0 h190.0 a4.0,4.0 0 0 1 4.0,4.0 v7.0 a4.0,4.0 0 0 1 -4.0,4.0 h-190.0 z" fill="#2a78d6"/>
+<text x="884.0" y="123.0" fill="#0b0b0b" font-size="12" text-anchor="start" font-weight="600">58.2</text>
+<text x="674.0" y="146.0" fill="#52514e" font-size="12" text-anchor="end" font-weight="normal">sorted vector + flat index</text>
+<path d="M684.0,134.0 h127.2 a4.0,4.0 0 0 1 4.0,4.0 v7.0 a4.0,4.0 0 0 1 -4.0,4.0 h-127.2 z" fill="#b9b8b1"/>
+<text x="821.2" y="146.0" fill="#52514e" font-size="12" text-anchor="start" font-weight="normal">39.4</text>
+<text x="674.0" y="169.0" fill="#52514e" font-size="12" text-anchor="end" font-weight="normal">std::map + flat index</text>
+<path d="M684.0,157.0 h112.6 a4.0,4.0 0 0 1 4.0,4.0 v7.0 a4.0,4.0 0 0 1 -4.0,4.0 h-112.6 z" fill="#b9b8b1"/>
+<text x="806.6" y="169.0" fill="#52514e" font-size="12" text-anchor="start" font-weight="normal">35.0</text>
+<text x="674.0" y="192.0" fill="#52514e" font-size="12" text-anchor="end" font-weight="normal">dense ladder + unordered_map</text>
+<path d="M684.0,180.0 h100.1 a4.0,4.0 0 0 1 4.0,4.0 v7.0 a4.0,4.0 0 0 1 -4.0,4.0 h-100.1 z" fill="#b9b8b1"/>
+<text x="794.1" y="192.0" fill="#52514e" font-size="12" text-anchor="start" font-weight="normal">31.2</text>
+<text x="674.0" y="215.0" fill="#52514e" font-size="12" text-anchor="end" font-weight="normal">std::map + unordered_map</text>
+<path d="M684.0,203.0 h73.8 a4.0,4.0 0 0 1 4.0,4.0 v7.0 a4.0,4.0 0 0 1 -4.0,4.0 h-73.8 z" fill="#b9b8b1"/>
+<text x="767.8" y="215.0" fill="#52514e" font-size="12" text-anchor="start" font-weight="normal">23.3</text>
+<text x="0.0" y="282.0" fill="#0b0b0b" font-size="13" text-anchor="start" font-weight="600">sweep-heavy</text>
+<text x="446.0" y="282.0" fill="#52514e" font-size="12" text-anchor="end" font-weight="normal">0.6k resting orders</text>
+<line x1="202.0" y1="292" x2="202.0" y2="434" stroke="#e4e3df"/>
+<text x="202.0" y="448.0" fill="#8a8984" font-size="11" text-anchor="middle" font-weight="normal">0</text>
+<line x1="268.7" y1="292" x2="268.7" y2="434" stroke="#e4e3df"/>
+<text x="268.7" y="448.0" fill="#8a8984" font-size="11" text-anchor="middle" font-weight="normal">20</text>
+<line x1="335.3" y1="292" x2="335.3" y2="434" stroke="#e4e3df"/>
+<text x="335.3" y="448.0" fill="#8a8984" font-size="11" text-anchor="middle" font-weight="normal">40</text>
+<line x1="402.0" y1="292" x2="402.0" y2="434" stroke="#e4e3df"/>
+<text x="402.0" y="448.0" fill="#8a8984" font-size="11" text-anchor="middle" font-weight="normal">60</text>
+<text x="192.0" y="308.0" fill="#52514e" font-size="12" text-anchor="end" font-weight="normal">dense ladder + flat index</text>
+<path d="M202.0,296.0 h176.5 a4.0,4.0 0 0 1 4.0,4.0 v7.0 a4.0,4.0 0 0 1 -4.0,4.0 h-176.5 z" fill="#2a78d6"/>
+<text x="388.5" y="308.0" fill="#0b0b0b" font-size="12" text-anchor="start" font-weight="600">54.1</text>
+<text x="192.0" y="331.0" fill="#52514e" font-size="12" text-anchor="end" font-weight="normal">  + prefetching replay</text>
+<path d="M202.0,319.0 h173.3 a4.0,4.0 0 0 1 4.0,4.0 v7.0 a4.0,4.0 0 0 1 -4.0,4.0 h-173.3 z" fill="#2a78d6"/>
+<text x="385.3" y="331.0" fill="#0b0b0b" font-size="12" text-anchor="start" font-weight="600">53.2</text>
+<text x="192.0" y="354.0" fill="#52514e" font-size="12" text-anchor="end" font-weight="normal">sorted vector + flat index</text>
+<path d="M202.0,342.0 h113.8 a4.0,4.0 0 0 1 4.0,4.0 v7.0 a4.0,4.0 0 0 1 -4.0,4.0 h-113.8 z" fill="#b9b8b1"/>
+<text x="325.8" y="354.0" fill="#52514e" font-size="12" text-anchor="start" font-weight="normal">35.3</text>
+<text x="192.0" y="377.0" fill="#52514e" font-size="12" text-anchor="end" font-weight="normal">std::map + flat index</text>
+<path d="M202.0,365.0 h86.3 a4.0,4.0 0 0 1 4.0,4.0 v7.0 a4.0,4.0 0 0 1 -4.0,4.0 h-86.3 z" fill="#b9b8b1"/>
+<text x="298.3" y="377.0" fill="#52514e" font-size="12" text-anchor="start" font-weight="normal">27.1</text>
+<text x="192.0" y="400.0" fill="#52514e" font-size="12" text-anchor="end" font-weight="normal">dense ladder + unordered_map</text>
+<path d="M202.0,388.0 h100.4 a4.0,4.0 0 0 1 4.0,4.0 v7.0 a4.0,4.0 0 0 1 -4.0,4.0 h-100.4 z" fill="#b9b8b1"/>
+<text x="312.4" y="400.0" fill="#52514e" font-size="12" text-anchor="start" font-weight="normal">31.3</text>
+<text x="192.0" y="423.0" fill="#52514e" font-size="12" text-anchor="end" font-weight="normal">std::map + unordered_map</text>
+<path d="M202.0,411.0 h61.0 a4.0,4.0 0 0 1 4.0,4.0 v7.0 a4.0,4.0 0 0 1 -4.0,4.0 h-61.0 z" fill="#b9b8b1"/>
+<text x="273.0" y="423.0" fill="#52514e" font-size="12" text-anchor="start" font-weight="normal">19.5</text>
+<text x="482.0" y="282.0" fill="#0b0b0b" font-size="13" text-anchor="start" font-weight="600">deep-book</text>
+<text x="928.0" y="282.0" fill="#52514e" font-size="12" text-anchor="end" font-weight="normal">967k resting orders</text>
+<line x1="684.0" y1="292" x2="684.0" y2="434" stroke="#e4e3df"/>
+<text x="684.0" y="448.0" fill="#8a8984" font-size="11" text-anchor="middle" font-weight="normal">0</text>
+<line x1="750.7" y1="292" x2="750.7" y2="434" stroke="#e4e3df"/>
+<text x="750.7" y="448.0" fill="#8a8984" font-size="11" text-anchor="middle" font-weight="normal">20</text>
+<line x1="817.3" y1="292" x2="817.3" y2="434" stroke="#e4e3df"/>
+<text x="817.3" y="448.0" fill="#8a8984" font-size="11" text-anchor="middle" font-weight="normal">40</text>
+<line x1="884.0" y1="292" x2="884.0" y2="434" stroke="#e4e3df"/>
+<text x="884.0" y="448.0" fill="#8a8984" font-size="11" text-anchor="middle" font-weight="normal">60</text>
+<text x="674.0" y="308.0" fill="#52514e" font-size="12" text-anchor="end" font-weight="normal">dense ladder + flat index</text>
+<path d="M684.0,296.0 h48.2 a4.0,4.0 0 0 1 4.0,4.0 v7.0 a4.0,4.0 0 0 1 -4.0,4.0 h-48.2 z" fill="#2a78d6"/>
+<text x="742.2" y="308.0" fill="#0b0b0b" font-size="12" text-anchor="start" font-weight="600">15.7</text>
+<text x="674.0" y="331.0" fill="#52514e" font-size="12" text-anchor="end" font-weight="normal">  + prefetching replay</text>
+<path d="M684.0,319.0 h75.2 a4.0,4.0 0 0 1 4.0,4.0 v7.0 a4.0,4.0 0 0 1 -4.0,4.0 h-75.2 z" fill="#2a78d6"/>
+<text x="769.2" y="331.0" fill="#0b0b0b" font-size="12" text-anchor="start" font-weight="600">23.8</text>
+<text x="674.0" y="354.0" fill="#52514e" font-size="12" text-anchor="end" font-weight="normal">sorted vector + flat index</text>
+<path d="M684.0,342.0 h21.4 a4.0,4.0 0 0 1 4.0,4.0 v7.0 a4.0,4.0 0 0 1 -4.0,4.0 h-21.4 z" fill="#b9b8b1"/>
+<text x="715.4" y="354.0" fill="#52514e" font-size="12" text-anchor="start" font-weight="normal">7.6</text>
+<text x="674.0" y="377.0" fill="#52514e" font-size="12" text-anchor="end" font-weight="normal">std::map + flat index</text>
+<path d="M684.0,365.0 h25.6 a4.0,4.0 0 0 1 4.0,4.0 v7.0 a4.0,4.0 0 0 1 -4.0,4.0 h-25.6 z" fill="#b9b8b1"/>
+<text x="719.6" y="377.0" fill="#52514e" font-size="12" text-anchor="start" font-weight="normal">8.9</text>
+<text x="674.0" y="400.0" fill="#52514e" font-size="12" text-anchor="end" font-weight="normal">dense ladder + unordered_map</text>
+<path d="M684.0,388.0 h12.1 a4.0,4.0 0 0 1 4.0,4.0 v7.0 a4.0,4.0 0 0 1 -4.0,4.0 h-12.1 z" fill="#b9b8b1"/>
+<text x="706.1" y="400.0" fill="#52514e" font-size="12" text-anchor="start" font-weight="normal">4.8</text>
+<text x="674.0" y="423.0" fill="#52514e" font-size="12" text-anchor="end" font-weight="normal">std::map + unordered_map</text>
+<path d="M684.0,411.0 h9.5 a4.0,4.0 0 0 1 4.0,4.0 v7.0 a4.0,4.0 0 0 1 -4.0,4.0 h-9.5 z" fill="#b9b8b1"/>
+<text x="703.5" y="423.0" fill="#52514e" font-size="12" text-anchor="start" font-weight="normal">4.1</text>
+</svg>

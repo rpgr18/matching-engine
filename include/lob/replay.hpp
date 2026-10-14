@@ -15,10 +15,10 @@ struct ReplayOptions {
   std::ptrdiff_t order_distance = 10;
   std::ptrdiff_t neighbour_distance = 4;
   /// Prefetch only while the book holds at least this many resting orders. Below it the book is
-  /// cache resident and the hints are pure overhead: on an M2 Pro (16 MB L2 per cluster) they
-  /// cost a third of throughput at 100k orders and add half again at 1M, crossing over between
-  /// 100k and 200k.
-  std::size_t min_orders = 1u << 17;
+  /// cache resident and the hints are pure overhead. Measured with `lob_bench --depth-sweep`:
+  /// on an M2 Pro they cost a third of throughput at 90k orders, break even near 200k, and add
+  /// half again at 1M; on a cloud EPYC 7763 they double throughput at 1M.
+  std::size_t min_orders = 1u << 18;
 };
 
 /// Applies a batch of requests in order, with software-pipelined prefetching once the book is

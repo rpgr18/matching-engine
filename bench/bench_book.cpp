@@ -11,6 +11,10 @@
 //
 //   lob_bench [--requests N] [--reps N] [--workload NAME[,NAME...]] [--impl NAME[,NAME...]]
 //             [--json PATH] [--no-latency] [--cpu N]
+//   lob_bench --depth-sweep [--requests N] [--reps N] [--json PATH]
+//
+// --depth-sweep measures where software prefetching starts to pay: balanced flow at resting
+// depths from 10k to 1M orders, with prefetching off, always on, and adaptive (the default).
 
 #include <algorithm>
 #include <chrono>
@@ -22,6 +26,7 @@
 #include <fstream>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -90,6 +95,7 @@ struct Options {
   std::vector<std::string> impls;
   std::string json;
   bool latency = true;
+  bool depth_sweep = false;
   int cpu = -1;
 };
 
@@ -112,8 +118,11 @@ struct ImplResult {
   std::exit(1);
 }
 
+std::optional<std::size_t> g_min_orders;  // overrides ReplayOptions::min_orders (depth sweep)
+
 ReplayOptions replay_options() {
   ReplayOptions o;
+  if (g_min_orders) o.min_orders = *g_min_orders;
   // For tuning: LOB_PREFETCH="slot,order,neighbour[,min_orders]".
   if (const char* v = std::getenv("LOB_PREFETCH")) {
     std::sscanf(v, "%td,%td,%td,%zu", &o.slot_distance, &o.order_distance,
@@ -256,12 +265,16 @@ Options parse(int argc, char** argv) {
       o.json = value();
     } else if (a == "--no-latency") {
       o.latency = false;
+    } else if (a == "--depth-sweep") {
+      o.depth_sweep = true;
     } else if (a == "--cpu") {
       o.cpu = std::atoi(value().c_str());
     } else if (a == "--help" || a == "-h") {
       std::printf(
           "usage: lob_bench [--requests N] [--reps N] [--workload a,b] [--impl a,b]\n"
-          "                 [--json PATH] [--no-latency] [--cpu N]\n\nworkloads:");
+          "                 [--json PATH] [--no-latency] [--cpu N]\n"
+          "       lob_bench --depth-sweep [--requests N] [--reps N] [--json PATH]\n\n"
+          "workloads:");
       for (const auto& w : standard_workloads(0)) std::printf(" %s", w.name.c_str());
       std::printf("\nimpls:\n");
       for (const auto& im : all_impls()) std::printf("  %-12s %s\n", im.name, im.description);
@@ -344,7 +357,8 @@ void write_json(const std::string& path, const Options& opt, const std::string& 
   out << "{\n  \"machine\": {\"cpu\": \"" << bench::cpu_name() << "\", \"os\": \""
       << bench::os_name() << "\", \"compiler\": \"" << bench::compiler_name()
       << "\", \"timer_resolution_ns\": " << clock::resolution_ns()
-      << ", \"timer_overhead_ns\": " << clock::overhead_ns() << ", \"placement\": \"" << placement
+      << ", \"timer_overhead_ns\": " << clock::overhead_ns()
+      << ", \"timer_floor_ns\": " << clock::floor_ns() << ", \"placement\": \"" << placement
       << "\", \"date\": \"" << date << "\"},\n";
   out << "  \"reps\": " << opt.reps << ",\n  \"workloads\": [\n";
   for (std::size_t i = 0; i < runs.size(); ++i) {
@@ -373,6 +387,59 @@ void write_json(const std::string& path, const Options& opt, const std::string& 
   out << "  ]\n}\n";
 }
 
+/// Balanced flow at increasing resting depth, replayed with prefetching off, always on, and
+/// adaptive. Shows the cost of the hints while the book is cache resident and their payoff once
+/// it is not, and checks that the adaptive threshold sits near the crossover.
+int depth_sweep(Options opt, const std::string& placement) {
+  opt.latency = false;
+  std::printf("\ndepth sweep: balanced flow, %s requests per depth, M requests/s (median of %d)\n\n",
+              with_commas(static_cast<double>(opt.requests)).c_str(), opt.reps);
+  std::printf("  %12s %10s %10s %10s\n", "resting", "plain", "always pf", "adaptive");
+  struct Row {
+    double orders, plain, always, adaptive;
+  };
+  std::vector<Row> rows;
+  for (std::uint32_t depth : {10'000u, 30'000u, 100'000u, 200'000u, 400'000u, 1'000'000u}) {
+    WorkloadSpec spec;
+    spec.name = "depth-" + std::to_string(depth);
+    spec.requests = opt.requests;
+    spec.target_depth = depth;
+    spec.prefill = depth;
+    spec.depth_mean = depth / 2500.0 + 8;
+    spec.move_prob = 0.002;
+    const Workload w = generate(spec);
+    Row r{w.stats.mean_depth, 0, 0, 0};
+    g_min_orders.reset();
+    r.plain = run_impl<DenseBookTraits>("plain", w, opt).median_mreq_s;
+    g_min_orders = 0;
+    r.always = run_impl<DenseBookTraits, true>("always", w, opt).median_mreq_s;
+    g_min_orders.reset();
+    r.adaptive = run_impl<DenseBookTraits, true>("adaptive", w, opt).median_mreq_s;
+    std::printf("  %12s %10.2f %10.2f %10.2f\n", with_commas(r.orders).c_str(), r.plain, r.always,
+                r.adaptive);
+    std::fflush(stdout);
+    rows.push_back(r);
+  }
+  if (!opt.json.empty()) {
+    std::ofstream out(opt.json);
+    if (!out) die("cannot write " + opt.json);
+    out.precision(6);
+    out << "{\n  \"machine\": {\"cpu\": \"" << bench::cpu_name() << "\", \"os\": \""
+        << bench::os_name() << "\", \"compiler\": \"" << bench::compiler_name()
+        << "\", \"placement\": \"" << placement << "\"},\n  \"requests\": " << opt.requests
+        << ",\n  \"min_orders\": " << ReplayOptions{}.min_orders << ",\n  \"rows\": [\n";
+    for (std::size_t i = 0; i < rows.size(); ++i) {
+      const Row& r = rows[i];
+      out << "    {\"orders\": " << r.orders << ", \"plain\": " << r.plain
+          << ", \"always\": " << r.always << ", \"adaptive\": " << r.adaptive << "}"
+          << (i + 1 < rows.size() ? "," : "") << "\n";
+    }
+    out << "  ]\n}\n";
+    std::printf("\nwrote %s\n", opt.json.c_str());
+  }
+  return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -381,8 +448,12 @@ int main(int argc, char** argv) {
 
   std::printf("lob_bench | %s | %s | %s\n", bench::cpu_name().c_str(), bench::os_name().c_str(),
               bench::compiler_name().c_str());
-  std::printf("timer: %.2f ns resolution, %.1f ns per read | %s | %d timed replays per result\n",
-              clock::resolution_ns(), clock::overhead_ns(), placement.c_str(), opt.reps);
+  std::printf(
+      "timer: %.2f ns resolution, %.1f ns per read, %.1f ns empty-interval floor | %s | "
+      "%d timed replays per result\n",
+      clock::resolution_ns(), clock::overhead_ns(), clock::floor_ns(), placement.c_str(),
+      opt.reps);
+  if (opt.depth_sweep) return depth_sweep(opt, placement);
 
   std::vector<std::pair<Workload, std::vector<ImplResult>>> runs;
   for (const WorkloadSpec& spec : standard_workloads(opt.requests)) {

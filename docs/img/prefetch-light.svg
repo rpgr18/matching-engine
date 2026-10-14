@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="330" viewBox="0 0 720 330" role="img" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+<title>Software prefetching: cost and payoff by book depth</title><desc>Million requests per second against resting orders, with prefetching off and always on; the adaptive threshold is marked.</desc>
+<text x="0.0" y="18.0" fill="#0b0b0b" font-size="15" text-anchor="start" font-weight="600">Prefetching pays once the book outgrows the cache</text>
+<text x="0.0" y="38.0" fill="#52514e" font-size="12" text-anchor="start" font-weight="normal">Balanced flow, single core, million requests per second by resting orders (log scale)</text>
+<line x1="56" y1="284.0" x2="570" y2="284.0" stroke="#e4e3df"/>
+<text x="48.0" y="288.0" fill="#8a8984" font-size="11" text-anchor="end" font-weight="normal">0</text>
+<line x1="56" y1="246.3" x2="570" y2="246.3" stroke="#e4e3df"/>
+<text x="48.0" y="250.3" fill="#8a8984" font-size="11" text-anchor="end" font-weight="normal">10</text>
+<line x1="56" y1="208.7" x2="570" y2="208.7" stroke="#e4e3df"/>
+<text x="48.0" y="212.7" fill="#8a8984" font-size="11" text-anchor="end" font-weight="normal">20</text>
+<line x1="56" y1="171.0" x2="570" y2="171.0" stroke="#e4e3df"/>
+<text x="48.0" y="175.0" fill="#8a8984" font-size="11" text-anchor="end" font-weight="normal">30</text>
+<line x1="56" y1="133.3" x2="570" y2="133.3" stroke="#e4e3df"/>
+<text x="48.0" y="137.3" fill="#8a8984" font-size="11" text-anchor="end" font-weight="normal">40</text>
+<line x1="56" y1="95.7" x2="570" y2="95.7" stroke="#e4e3df"/>
+<text x="48.0" y="99.7" fill="#8a8984" font-size="11" text-anchor="end" font-weight="normal">50</text>
+<line x1="56" y1="58.0" x2="570" y2="58.0" stroke="#e4e3df"/>
+<text x="48.0" y="62.0" fill="#8a8984" font-size="11" text-anchor="end" font-weight="normal">60</text>
+<text x="82.6" y="302.0" fill="#8a8984" font-size="11" text-anchor="middle" font-weight="normal">10k</text>
+<text x="196.6" y="302.0" fill="#8a8984" font-size="11" text-anchor="middle" font-weight="normal">30k</text>
+<text x="321.4" y="302.0" fill="#8a8984" font-size="11" text-anchor="middle" font-weight="normal">100k</text>
+<text x="435.4" y="302.0" fill="#8a8984" font-size="11" text-anchor="middle" font-weight="normal">300k</text>
+<text x="560.2" y="302.0" fill="#8a8984" font-size="11" text-anchor="middle" font-weight="normal">1M</text>
+<line x1="421.4" y1="58" x2="421.4" y2="284" stroke="#c3c2b7" stroke-dasharray="4 4"/>
+<text x="427.4" y="70.0" fill="#52514e" font-size="11" text-anchor="start" font-weight="normal">replay() switches on at 256k orders</text>
+<path d="M67.9,156.7 L183.1,162.3 L311.4,163.8 L386.7,171.1 L460.5,184.6 L558.1,194.4" fill="none" stroke="#eb6834" stroke-width="2" stroke-linejoin="round"/>
+<circle cx="67.9" cy="156.7" r="4" fill="#eb6834" stroke="#ffffff" stroke-width="2"/>
+<circle cx="183.1" cy="162.3" r="4" fill="#eb6834" stroke="#ffffff" stroke-width="2"/>
+<circle cx="311.4" cy="163.8" r="4" fill="#eb6834" stroke="#ffffff" stroke-width="2"/>
+<circle cx="386.7" cy="171.1" r="4" fill="#eb6834" stroke="#ffffff" stroke-width="2"/>
+<circle cx="460.5" cy="184.6" r="4" fill="#eb6834" stroke="#ffffff" stroke-width="2"/>
+<circle cx="558.1" cy="194.4" r="4" fill="#eb6834" stroke="#ffffff" stroke-width="2"/>
+<text x="568.1" y="198.4" fill="#0b0b0b" font-size="12" text-anchor="start" font-weight="normal">prefetching on 23.8</text>
+<path d="M67.9,76.1 L183.1,87.5 L311.4,101.0 L386.7,160.4 L460.5,209.9 L558.1,224.2" fill="none" stroke="#2a78d6" stroke-width="2" stroke-linejoin="round"/>
+<circle cx="67.9" cy="76.1" r="4" fill="#2a78d6" stroke="#ffffff" stroke-width="2"/>
+<circle cx="183.1" cy="87.5" r="4" fill="#2a78d6" stroke="#ffffff" stroke-width="2"/>
+<circle cx="311.4" cy="101.0" r="4" fill="#2a78d6" stroke="#ffffff" stroke-width="2"/>
+<circle cx="386.7" cy="160.4" r="4" fill="#2a78d6" stroke="#ffffff" stroke-width="2"/>
+<circle cx="460.5" cy="209.9" r="4" fill="#2a78d6" stroke="#ffffff" stroke-width="2"/>
+<circle cx="558.1" cy="224.2" r="4" fill="#2a78d6" stroke="#ffffff" stroke-width="2"/>
+<text x="568.1" y="228.2" fill="#0b0b0b" font-size="12" text-anchor="start" font-weight="normal">prefetching off 15.9</text>
+<circle cx="61" cy="320" r="4" fill="#2a78d6"/>
+<text x="70.0" y="324.0" fill="#52514e" font-size="12" text-anchor="start" font-weight="normal">prefetching off</text>
+<circle cx="191" cy="320" r="4" fill="#eb6834"/>
+<text x="200.0" y="324.0" fill="#52514e" font-size="12" text-anchor="start" font-weight="normal">prefetching on</text>
+</svg>

@@ -77,6 +77,20 @@ inline double calibrate() {
 /// Length of one counter tick in nanoseconds: the finest difference two reads can show.
 [[nodiscard]] inline double resolution_ns() { return 1.0 / ticks_per_ns(); }
 
+/// What an empty timed interval measures: the median of now() - now() over back-to-back reads,
+/// in nanoseconds. Every latency sample includes roughly this much of the timer's own cost.
+[[nodiscard]] inline double floor_ns() {
+  constexpr int kSamples = 1 << 16;
+  std::vector<std::uint64_t> d(kSamples);
+  for (auto& v : d) {
+    const std::uint64_t t0 = now();
+    const std::uint64_t t1 = now();
+    v = t1 - t0;
+  }
+  std::nth_element(d.begin(), d.begin() + kSamples / 2, d.end());
+  return to_ns(d[kSamples / 2]);
+}
+
 /// Average cost of one now() call, in nanoseconds.
 [[nodiscard]] inline double overhead_ns() {
   constexpr int kReads = 1 << 16;

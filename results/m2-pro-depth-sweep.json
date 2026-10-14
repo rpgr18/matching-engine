@@ -1,0 +1,13 @@
+{
+  "machine": {"cpu": "Apple M2 Pro", "os": "macOS", "compiler": "clang 21.0.0 (clang-2100.3.34.2)", "placement": "QoS user-interactive (macOS has no thread pinning)"},
+  "requests": 2000000,
+  "min_orders": 262144,
+  "rows": [
+    {"orders": 8677.73, "plain": 55.1916, "always": 33.8014, "adaptive": 54.4865},
+    {"orders": 26353.1, "plain": 52.1573, "always": 32.3177, "adaptive": 50.8659},
+    {"orders": 90780, "plain": 48.5894, "always": 31.9136, "adaptive": 49.0814},
+    {"orders": 187622, "plain": 32.8104, "always": 29.9796, "adaptive": 34.2544},
+    {"orders": 382362, "plain": 19.6806, "always": 26.4025, "adaptive": 26.6209},
+    {"orders": 979108, "plain": 15.8757, "always": 23.7837, "adaptive": 23.7799}
+  ]
+}

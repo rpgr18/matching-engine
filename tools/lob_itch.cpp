@@ -209,6 +209,25 @@ class Verifier : public itch::NullHandler {
     after(m.h);
   }
 
+  /// NASDAQ's own auction prints ('Q') for the symbols being watched: the official opening and
+  /// closing prices, to compare the rebuilt books against.
+  void on_other(char type, const std::uint8_t* p, std::size_t len) {
+    if (type != itch::kCrossTrade || len < 40) return;
+    const std::uint16_t locate = itch::detail::be16(p + 1);
+    if (locate >= b_.instruments() || !watched(locate)) return;
+    crosses.push_back(Cross{locate, itch::detail::be48(p + 5), itch::detail::be64(p + 11),
+                            itch::detail::be32(p + 27), static_cast<char>(p[39])});
+  }
+
+  struct Cross {
+    std::uint16_t locate;
+    std::uint64_t ts;
+    std::uint64_t shares;
+    std::uint32_t price;
+    char kind;  ///< 'O' opening, 'C' closing, 'H' halt or IPO, 'I' intraday
+  };
+  std::vector<Cross> crosses;
+
   Tally continuous;               ///< 09:30:01 to 15:59:59, clear of the opening and closing crosses
   Tally outside;                  ///< everything else
   std::uint64_t with_price = 0;   ///< 'C' executions, which print away from the order's price
@@ -251,6 +270,12 @@ class Verifier : public itch::NullHandler {
       t.crossed += *bid > *ask;
       t.locked += *bid == *ask;
     }
+  }
+
+  bool watched(std::uint16_t locate) const {
+    for (const std::string& s : symbols_)
+      if (b_.name(locate) == s) return true;
+    return false;
   }
 
   void tick(std::uint64_t ts) {
@@ -312,6 +337,15 @@ void verify(const Mapping& file, const itch::Capacity& cap, std::uint64_t at,
   }
   std::printf("  'C' executions (printed away from the order price, not checked): %llu\n",
               static_cast<unsigned long long>(v.with_price));
+  for (const auto& c : v.crosses) {
+    const char* kind = c.kind == 'O'   ? "opening cross"
+                       : c.kind == 'C' ? "closing cross"
+                       : c.kind == 'H' ? "halt/IPO cross"
+                                       : "intraday cross";
+    std::printf("  %s %s at %s: %llu shares @ %s\n", builder.name(c.locate).c_str(), kind,
+                clock_time(c.ts).c_str(), static_cast<unsigned long long>(c.shares),
+                price(c.price).c_str());
+  }
 }
 
 std::uint64_t parse_time(const std::string& s) {

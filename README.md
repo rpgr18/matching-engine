@@ -213,15 +213,22 @@ faster but wrong fails the run.
 
 Million requests per second, one core:
 
-| | M2 Pro | | | | EPYC 9V74 VM | | | |
-|---|---|---|---|---|---|---|---|---|
-| **design** | balanced | cancel-heavy | sweep-heavy | deep-book | balanced | cancel-heavy | sweep-heavy | deep-book |
-| dense + flat (default) | **56.2** | **58.4** | **54.1** | 15.7 | **44.8** | **49.1** | **43.8** | 8.4 |
-| + prefetching replay | 56.2 | 58.2 | 53.2 | **23.8** | 44.6 | 48.6 | 43.3 | **17.4** |
-| sorted vector + flat | 35.4 | 39.4 | 35.3 | 7.6 | 26.9 | 32.3 | 26.5 | 6.0 |
-| `std::map` + flat | 30.3 | 35.0 | 27.1 | 8.9 | 25.4 | 30.3 | 21.9 | 5.5 |
-| dense + `unordered_map` | 25.3 | 31.2 | 31.3 | 4.8 | 23.7 | 26.9 | 24.6 | 3.6 |
-| `std::map` + `unordered_map` | 18.1 | 23.3 | 19.5 | 4.1 | 16.9 | 20.3 | 15.7 | 2.8 |
+| design | balanced | cancel-heavy | sweep-heavy | deep-book |
+|---|---|---|---|---|
+| **Apple M2 Pro** | | | | |
+| dense + flat (default) | **56.2** | **58.4** | **54.1** | 15.7 |
+| + prefetching replay | 56.2 | 58.2 | 53.2 | **23.8** |
+| sorted vector + flat | 35.4 | 39.4 | 35.3 | 7.6 |
+| `std::map` + flat | 30.3 | 35.0 | 27.1 | 8.9 |
+| dense + `unordered_map` | 25.3 | 31.2 | 31.3 | 4.8 |
+| `std::map` + `unordered_map` | 18.1 | 23.3 | 19.5 | 4.1 |
+| **AMD EPYC 9V74 (cloud VM)** | | | | |
+| dense + flat (default) | **44.8** | **49.1** | **43.8** | 8.4 |
+| + prefetching replay | 44.6 | 48.6 | 43.3 | **17.4** |
+| sorted vector + flat | 26.9 | 32.3 | 26.5 | 6.0 |
+| `std::map` + flat | 25.4 | 30.3 | 21.9 | 5.5 |
+| dense + `unordered_map` | 23.7 | 26.9 | 24.6 | 3.6 |
+| `std::map` + `unordered_map` | 16.9 | 20.3 | 15.7 | 2.8 |
 
 GitHub's runner pool mixes CPU generations. An earlier run of the same code
 landed on a Zen 3 EPYC 7763 and measured 33.4M requests/s with a 121 ns p99

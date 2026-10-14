@@ -13,6 +13,16 @@ namespace lob {
 /// 128-byte lines, and x86 prefetches adjacent 64-byte lines in pairs, so 128 is right for both.
 inline constexpr std::size_t kCacheLine = 128;
 
+/// Spin-wait hint: lets a sibling hyperthread run and stops a polling core from hammering the
+/// line it is waiting on quite so hard.
+inline void cpu_relax() noexcept {
+#if defined(__x86_64__) || defined(_M_X64)
+  __builtin_ia32_pause();
+#elif defined(__aarch64__)
+  asm volatile("isb" ::: "memory");  // a short, predictable delay; `yield` is a no-op on most cores
+#endif
+}
+
 /// Bounded single-producer, single-consumer ring buffer.
 ///
 /// - Lock-free and wait-free: push and pop are a handful of loads and stores plus one release
@@ -23,6 +33,10 @@ inline constexpr std::size_t kCacheLine = 128;
 ///   thread is writing.
 /// - Indices grow without wrapping and are masked on access, which distinguishes full from empty
 ///   without sacrificing a slot.
+/// - The producer can stage several elements and make them visible with one release store
+///   (write() then publish()). Every publish hands the tail's cache line to a polling consumer,
+///   so publishing once per burst instead of once per element is the difference between paying
+///   one cross-core transfer per burst and one per element.
 template <class T>
 class SpscQueue {
   static_assert(std::is_trivially_copyable_v<T>, "elements are copied with plain stores");
@@ -36,22 +50,39 @@ class SpscQueue {
   SpscQueue(const SpscQueue&) = delete;
   SpscQueue& operator=(const SpscQueue&) = delete;
 
-  /// Producer only. Returns false if the queue is full.
-  bool try_push(const T& value) noexcept {
-    const std::size_t tail = tail_.load(std::memory_order_relaxed);
-    if (tail - head_cache_ == capacity_) {
+  /// Producer only. Stages an element without making it visible. Returns false if full.
+  bool try_write(const T& value) noexcept {
+    if (write_ - head_cache_ == capacity_) {
       head_cache_ = head_.load(std::memory_order_acquire);
-      if (tail - head_cache_ == capacity_) return false;
+      if (write_ - head_cache_ == capacity_) return false;
     }
-    slot(tail) = value;
-    tail_.store(tail + 1, std::memory_order_release);
+    slot(write_) = value;
+    ++write_;
+    return true;
+  }
+
+  /// Producer only. Stages an element, publishing what is staged and spinning while full.
+  void write(const T& value) noexcept {
+    while (!try_write(value)) {
+      publish();
+      cpu_relax();
+    }
+  }
+
+  /// Producer only. Makes every staged element visible to the consumer.
+  void publish() noexcept { tail_.store(write_, std::memory_order_release); }
+
+  /// Producer only. Stages and publishes one element. Returns false if the queue is full.
+  bool try_push(const T& value) noexcept {
+    if (!try_write(value)) return false;
+    publish();
     return true;
   }
 
   /// Producer only. Spins until there is room.
   void push(const T& value) noexcept {
-    while (!try_push(value)) {
-    }
+    write(value);
+    publish();
   }
 
   /// Consumer only. Returns false if the queue is empty.
@@ -99,8 +130,9 @@ class SpscQueue {
   const std::size_t mask_;
   const std::unique_ptr<T[]> slots_;
 
-  alignas(kCacheLine) std::atomic<std::size_t> tail_{0};  // written by the producer
-  alignas(kCacheLine) std::size_t head_cache_ = 0;        // producer's copy of head_
+  alignas(kCacheLine) std::atomic<std::size_t> tail_{0};  // published by the producer
+  alignas(kCacheLine) std::size_t write_ = 0;             // producer's next slot, maybe unpublished
+  std::size_t head_cache_ = 0;                            // producer's copy of head_
   alignas(kCacheLine) std::atomic<std::size_t> head_{0};  // written by the consumer
   alignas(kCacheLine) std::size_t tail_cache_ = 0;        // consumer's copy of tail_
   char tail_padding_[kCacheLine - sizeof(std::size_t)] = {};

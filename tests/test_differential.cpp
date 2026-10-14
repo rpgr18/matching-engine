@@ -232,7 +232,9 @@ Coverage run(const Scenario& s, std::uint64_t seed) {
     // A matching book must never be left crossed; a mirrored one may be.
     const auto bid = book.best_bid();
     const auto ask = book.best_ask();
-    if (!s.mirror) EXPECT_TRUE(!bid || !ask || *bid < *ask) << "crossed at step " << step;
+    if (!s.mirror) {
+      EXPECT_TRUE(!bid || !ask || *bid < *ask) << "crossed at step " << step;
+    }
 
     if (step % 64 == 0 || step + 1 == ops) {
       EXPECT_EQ(resting(book, Side::Buy), ref.resting(Side::Buy)) << "step " << step;
@@ -246,7 +248,9 @@ Coverage run(const Scenario& s, std::uint64_t seed) {
     if (::testing::Test::HasFailure()) return cov;
   }
   // Guard against a generator that silently stops exercising the matching path.
-  if (!s.mirror) EXPECT_GT(cov.trades, ops / 20) << s.name;
+  if (!s.mirror) {
+    EXPECT_GT(cov.trades, ops / 20) << s.name;
+  }
   return cov;
 }
 

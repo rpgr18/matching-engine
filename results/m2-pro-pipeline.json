@@ -1,10 +1,10 @@
 {
   "machine": {"cpu": "Apple M2 Pro", "os": "macOS", "compiler": "clang 21.0.0 (clang-2100.3.34.2)", "timer_resolution_ns": 41.6667, "placement": "QoS user-interactive (macOS has no thread pinning)", "date": "2026-10-14"},
-  "queue": {"mmsg_s": 119.619, "rtt_ns": {"count": 990000, "mean": 91.3817, "p50": 83.3333, "p90": 83.3333, "p99": 125, "p999": 333.333, "p9999": 9625, "max": 91208.3}},
-  "pipeline": {"workload": "balanced", "symbols": 4, "requests": 4000000, "runs": [
-    {"offered": 1e+06, "achieved": 1e+06, "events_per_request": 2.18937, "latency_ns": {"count": 3960000, "mean": 736.398, "p50": 541.667, "p90": 916.667, "p99": 5916.67, "p999": 13541.7, "p9999": 27458.3, "max": 75500}},
-    {"offered": 5e+06, "achieved": 4.98404e+06, "events_per_request": 2.18937, "latency_ns": {"count": 3960000, "mean": 1.39935e+06, "p50": 725292, "p90": 3.94662e+06, "p99": 7.21062e+06, "p999": 8.53329e+06, "p9999": 8.74662e+06, "max": 8.76075e+06}},
-    {"offered": 1e+07, "achieved": 6.17199e+06, "events_per_request": 2.18937, "latency_ns": {"count": 3960000, "mean": 1.2447e+08, "p50": 1.31755e+08, "p90": 2.21184e+08, "p99": 2.47125e+08, "p999": 2.48089e+08, "p9999": 2.48089e+08, "max": 2.48089e+08}},
-    {"offered": 0, "achieved": 6.60767e+06, "events_per_request": 2.18937, "latency_ns": {"count": 3960000, "mean": 18410.7, "p50": 750, "p90": 73958.3, "p99": 249292, "p999": 375958, "p9999": 378625, "max": 379042}}
+  "queue": {"mmsg_s": 107.875, "rtt_ns": {"count": 990000, "mean": 135.444, "p50": 83.3333, "p90": 333.333, "p99": 416.667, "p999": 458.333, "p9999": 9583.33, "max": 27291.7}},
+  "pipeline": {"workload": "balanced", "symbols": 4, "requests": 4000000, "batch": 32, "runs": [
+    {"offered": 1e+06, "achieved": 1e+06, "events_per_request": 2.18937, "latency_ns": {"count": 3960000, "mean": 677.128, "p50": 500, "p90": 791.667, "p99": 5500, "p999": 13458.3, "p9999": 19208.3, "max": 51833.3}},
+    {"offered": 5e+06, "achieved": 4.99999e+06, "events_per_request": 2.18937, "latency_ns": {"count": 3960000, "mean": 1685.39, "p50": 583.333, "p90": 4625, "p99": 13625, "p999": 20291.7, "p9999": 25958.3, "max": 39000}},
+    {"offered": 1e+07, "achieved": 8.95503e+06, "events_per_request": 2.18937, "latency_ns": {"count": 3960000, "mean": 2.5413e+07, "p50": 2.98666e+07, "p90": 4.13013e+07, "p99": 4.36906e+07, "p999": 4.66765e+07, "p9999": 4.66765e+07, "max": 4.66765e+07}},
+    {"offered": 0, "achieved": 9.08158e+06, "events_per_request": 2.18937, "latency_ns": {"count": 3960000, "mean": 10170.3, "p50": 875, "p90": 42291.7, "p99": 115958, "p999": 129292, "p9999": 134625, "max": 135000}}
   ]}
 }

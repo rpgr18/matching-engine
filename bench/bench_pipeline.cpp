@@ -16,7 +16,7 @@
 // round-trip time of a single message between two threads.
 //
 //   lob_pipeline [--requests N] [--symbols K] [--workload NAME] [--rates 1e6,5e6,max]
-//                [--queue N] [--cpus a,b,c] [--json PATH]
+//                [--queue N] [--batch N] [--cpus a,b,c] [--json PATH]
 
 #include <algorithm>
 #include <atomic>
@@ -79,13 +79,11 @@ struct Publisher {
     pending.sent_and_last = sent;
     have = true;
   }
-  /// Ends the current request: flags its last event and publishes everything it produced with
-  /// a single release store.
+  /// Ends the current request: flags its last event and stages it. The caller publishes.
   void finish() {
     if (!live) return;
     pending.sent_and_last |= OutMsg::kLast;
     out->write(pending);
-    out->publish();
     have = false;
   }
 
@@ -109,6 +107,7 @@ struct Options {
   std::string workload = "balanced";
   std::vector<double> rates = {1e6, 5e6, 10e6, 0};  // 0 = flat out
   std::size_t queue = 1 << 16;
+  std::size_t batch = 32;
   int cpus[3] = {-1, -1, -1};
   std::string json;
 };
@@ -141,6 +140,8 @@ Options parse(int argc, char** argv) {
     } else if (a == "--rates") {
       o.rates.clear();
       for (const auto& r : list(value())) o.rates.push_back(r == "max" ? 0 : std::atof(r.c_str()));
+    } else if (a == "--batch") {
+      o.batch = std::max<std::size_t>(1, std::strtoull(value().c_str(), nullptr, 10));
     } else if (a == "--queue") {
       o.queue = std::strtoull(value().c_str(), nullptr, 10);
     } else if (a == "--cpus") {
@@ -152,7 +153,8 @@ Options parse(int argc, char** argv) {
     } else if (a == "--help" || a == "-h") {
       std::printf(
           "usage: lob_pipeline [--requests N] [--symbols K] [--workload NAME]\n"
-          "                    [--rates 1e6,5e6,max] [--queue N] [--cpus a,b,c] [--json PATH]\n");
+          "                    [--rates 1e6,5e6,max] [--queue N] [--batch N] [--cpus a,b,c]\n"
+          "                    [--json PATH]\n");
       std::exit(0);
     } else {
       die("unknown argument " + a + " (try --help)");
@@ -306,6 +308,7 @@ PipelineResult run_pipeline(const Options& opt, const Stream& st, double rate) {
   const std::size_t n = st.requests.size();
   const std::size_t warmup = n / 100;  // excluded from the histogram
 
+  const std::size_t kBatch = opt.batch;
   SpscQueue<InMsg> inbound(opt.queue);
   SpscQueue<OutMsg> outbound(opt.queue);
   std::atomic<int> ready{0};
@@ -326,7 +329,11 @@ PipelineResult run_pipeline(const Options& opt, const Stream& st, double rate) {
             engine->apply(m.command);
             pub.finish();
           },
-          64);
+          kBatch);
+      // One release store for everything this batch produced. When the gateway is ahead, the
+      // batch holds many requests and the drop copy takes the tail's line once for all of them;
+      // when it is not, the batch is a single request and nothing waits.
+      outbound.publish();
       if (got == 0) cpu_relax();
       done += got;
     }
@@ -412,10 +419,11 @@ int main(int argc, char** argv) {
               ns(q.rtt.quantile(0.5)), ns(q.rtt.quantile(0.99)), ns(q.rtt.quantile(0.999)));
 
   const Stream st = build_stream(opt);
-  std::printf("pipeline: %s flow over %d symbols, %s requests, queue capacity %s\n",
-              opt.workload.c_str(), opt.symbols,
-              with_commas(static_cast<double>(st.requests.size())).c_str(),
-              with_commas(static_cast<double>(opt.queue)).c_str());
+  std::printf(
+      "pipeline: %s flow over %d symbols, %s requests, queue capacity %s, engine batch %zu\n",
+      opt.workload.c_str(), opt.symbols,
+      with_commas(static_cast<double>(st.requests.size())).c_str(),
+      with_commas(static_cast<double>(opt.queue)).c_str(), opt.batch);
   std::printf("  %-10s %10s %10s | %7s %7s %7s %8s %8s %10s   gateway to drop copy, ns\n",
               "offered", "achieved", "events/req", "p50", "p90", "p99", "p99.9", "p99.99", "max");
 
@@ -445,7 +453,8 @@ int main(int argc, char** argv) {
     out << "  \"queue\": {\"mmsg_s\": " << q.mmsg_s << ", \"rtt_ns\": " << json_hist(q.rtt)
         << "},\n";
     out << "  \"pipeline\": {\"workload\": \"" << opt.workload << "\", \"symbols\": "
-        << opt.symbols << ", \"requests\": " << st.requests.size() << ", \"runs\": [\n";
+        << opt.symbols << ", \"requests\": " << st.requests.size() << ", \"batch\": " << opt.batch
+        << ", \"runs\": [\n";
     for (std::size_t i = 0; i < results.size(); ++i) {
       const auto& r = results[i];
       out << "    {\"offered\": " << r.offered << ", \"achieved\": " << r.achieved

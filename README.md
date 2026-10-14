@@ -1,6 +1,7 @@
 # matching-engine
 
-A price-time priority limit order book and matching engine in C++20. It is
+A price-time priority limit order book and matching engine in C++20, plus a
+NASDAQ TotalView-ITCH 5.0 feed handler built on the same books. It is
 header-only and does no allocation on the request path. It has been checked
 against a reference model over tens of millions of random requests, and it is
 benchmarked, not just described as fast.
@@ -11,13 +12,14 @@ cmake -B build -G Ninja && cmake --build build && ctest --test-dir build
 ./build/tools/lob_shell < examples/session.txt  # watch the matching rules in action
 ```
 
-| | Apple M2 Pro (1 core) | AMD EPYC 9V74, cloud VM (1 core) |
+| | Apple M2 Pro (1 core) | AMD EPYC 9V45, cloud VM (1 core) |
 |---|---|---|
-| Throughput, balanced flow | **56.2 M requests/s** (17.8 ns each) | **44.8 M requests/s** (22.3 ns each) |
-| Per-request latency, balanced flow | p50 ≤ 42 ns, **p99 ≤ 83 ns**, p99.9 ≤ 167 ns ¹ | p50 50 ns, **p99 131 ns**, p99.9 211 ns ² |
-| Throughput with 1M resting orders | **23.8 M requests/s** | **17.4 M requests/s** |
-| vs. `std::map` + `std::unordered_map` | 3.1× (balanced), 5.9× (1M orders) | 2.7× (balanced), 6.1× (1M orders) |
-| Gateway → engine → drop copy, 3 threads | 5 M requests/s sustained, p50 0.6 µs | 10 M requests/s sustained, p50 0.24 µs |
+| Throughput, balanced flow | **56.2 M requests/s** (17.8 ns each) | **56.1 M requests/s** (17.8 ns each) |
+| Per-request latency, balanced flow | p50 ≤ 42 ns, **p99 ≤ 83 ns**, p99.9 ≤ 167 ns ¹ | p50 40 ns, **p99 70 ns**, p99.9 121 ns ² |
+| Throughput with 1M resting orders | **23.8 M requests/s** | **19.5 M requests/s** |
+| vs. `std::map` + `std::unordered_map` | 3.1× (balanced), 5.9× (1M orders) | 2.7× (balanced), 4.9× (1M orders) |
+| Gateway → engine → drop copy, 3 threads | 5 M requests/s sustained, p50 0.6 µs | 10 M requests/s sustained, p50 0.21 µs |
+| ITCH 5.0: rebuild 16 books from a feed | 26 M messages/s (decode alone: 261 M/s) | 22 M messages/s (decode alone: 318 M/s) |
 
 ¹ Apple silicon's counter ticks at 24 MHz, so each sample is a whole number of 41.67 ns ticks
 and a reading of 83 ns means the request took between 42 and 125 ns. Means are unbiased; the
@@ -64,6 +66,10 @@ touched level is reported once, with its final state, not once per fill.
 
 **Multi-instrument.** `Engine` routes requests to one book per symbol by
 array index.
+
+**Market data in.** An ITCH 5.0 feed handler mirrors NASDAQ's market-by-order
+feed onto the same books, for every instrument at once (see
+[below](#itch-50-feed-handler)).
 
 ## Design
 
@@ -133,7 +139,7 @@ identical order flow:
 Fast and wrong is easy, so most of the testing effort goes into showing the
 book is right.
 
-- **258 tests** in GoogleTest. Every order-book and self-trade test runs
+- **281 tests** in GoogleTest. Every order-book and self-trade test runs
   against all three ladder policies, which must behave identically.
 - **Differential fuzzing against a reference model.** `ReferenceBook`
   (`tests/reference_book.hpp`) is an executable specification of the
@@ -222,32 +228,34 @@ Million requests per second, one core:
 | `std::map` + flat | 30.3 | 35.0 | 27.1 | 8.9 |
 | dense + `unordered_map` | 25.3 | 31.2 | 31.3 | 4.8 |
 | `std::map` + `unordered_map` | 18.1 | 23.3 | 19.5 | 4.1 |
-| **AMD EPYC 9V74 (cloud VM)** | | | | |
-| dense + flat (default) | **44.8** | **49.1** | **43.8** | 8.4 |
-| + prefetching replay | 44.6 | 48.6 | 43.3 | **17.4** |
-| sorted vector + flat | 26.9 | 32.3 | 26.5 | 6.0 |
-| `std::map` + flat | 25.4 | 30.3 | 21.9 | 5.5 |
-| dense + `unordered_map` | 23.7 | 26.9 | 24.6 | 3.6 |
-| `std::map` + `unordered_map` | 16.9 | 20.3 | 15.7 | 2.8 |
+| **AMD EPYC 9V45 (cloud VM)** | | | | |
+| dense + flat (default) | **56.1** | **57.5** | **53.9** | 10.9 |
+| + prefetching replay | 56.1 | 58.2 | 53.5 | **19.5** |
+| sorted vector + flat | 30.8 | 36.5 | 32.0 | 7.1 |
+| `std::map` + flat | 30.7 | 36.5 | 27.4 | 6.7 |
+| dense + `unordered_map` | 31.2 | 35.2 | 32.8 | 5.2 |
+| `std::map` + `unordered_map` | 20.9 | 24.9 | 19.0 | 4.0 |
 
-GitHub's runner pool mixes CPU generations. An earlier run of the same code
-landed on a Zen 3 EPYC 7763 and measured 33.4M requests/s with a 121 ns p99
-on balanced flow. Both runs are kept in `results/`.
+GitHub assigns a runner's CPU per run. The same code also ran on an EPYC 7763
+(33.4M requests/s on balanced flow) and an EPYC 9V74 (44.8M). All three runs
+are in `results/`; the tables use the 9V45 run because the book, pipeline and
+ITCH numbers all come from it.
 
 What the comparison shows:
 
-- **The index matters as much as the ladder.** In three of the four
-  workloads, swapping the flat table for `std::unordered_map` costs more
-  than swapping the dense ladder for a red-black tree. Every `unordered_map`
-  insert allocates a node, and every lookup chases a pointer into it. The
-  exception is sweep-heavy, where levels are created and destroyed
-  constantly and the tree allocates a node for every new one.
-- **The sorted vector is a real contender near the touch.** It reaches about
-  60% of the dense ladder's throughput while the book is shallow. It
+- **The index matters as much as the ladder.** In a shallow book, swapping
+  the flat table for `std::unordered_map` costs as much as swapping the
+  dense ladder for a red-black tree on the EPYC, and more on the M2. In the
+  deep book it costs more on both. Every `unordered_map` insert allocates a node, and every
+  lookup chases a pointer into it, which is a cache miss once the table no
+  longer fits in cache. The tree costs most in sweep-heavy, where levels are
+  created and destroyed constantly and it allocates a node for every new one.
+- **The sorted vector is a real contender near the touch.** It reaches 55–65%
+  of the dense ladder's throughput while the book is shallow. It
   collapses with a deep book, where inserting a level far from the touch is
   a `memmove`.
 - **At a million orders everything is memory-bound.** The ranking survives,
-  but the gap widens to 3.9× on the M2 and 2.9× on the EPYC, before
+  but the gap widens to 3.9× on the M2 and 2.7× on the EPYC, before
   prefetching.
 
 ### Latency per request
@@ -257,16 +265,16 @@ Nanoseconds per request, including about 20 ns of timer cost per sample:
 
 | | p50 | p90 | p99 | p99.9 | p99.99 |
 |---|---|---|---|---|---|
-| balanced | 50 | 60 | 131 | 211 | 371 |
-| cancel-heavy | 50 | 60 | 70 | 171 | 302 |
-| sweep-heavy | 50 | 60 | 161 | 362 | 671 |
-| deep-book, prefetching | 70 | 131 | 291 | 1,017 | 2,613 |
+| balanced | 40 | 50 | 70 | 121 | 201 |
+| cancel-heavy | 40 | 50 | 60 | 111 | 211 |
+| sweep-heavy | 40 | 50 | 121 | 271 | 462 |
+| deep-book, prefetching | 50 | 80 | 302 | 875 | 2,144 |
 
 By request type (balanced, EPYC):
 
-- a passive add takes 51 ns on average;
-- a cancel takes 56 ns;
-- an add that trades takes 82 ns, because it emits fills and level updates
+- a passive add takes 37 ns on average;
+- a cancel takes 43 ns;
+- an add that trades takes 63 ns, because it emits fills and level updates
   for the opposite side.
 
 On the M2 Pro the same breakdown is 30, 38 and 56 ns. Those figures are
@@ -301,7 +309,7 @@ pay:
 
 While the book is cache resident, prefetching costs about a third of
 throughput. Past roughly 200k orders it wins, by +50% at a million on the
-M2 Pro and +108% on the EPYC VM, where misses are more expensive. So
+M2 Pro and +79% on the EPYC VM, where misses are more expensive. So
 `replay()` checks the book's size every 1,024 requests and prefetches only
 above 262,144 resting orders. The lookahead distances came from sweeping
 them on the deep book, where gains plateau from about 16 requests out.
@@ -344,9 +352,12 @@ Gateway to drop copy, balanced flow over 4 symbols, 2.2 events per request:
 
 | offered load | M2 Pro: achieved | p50 | p99 | p99.9 | EPYC VM: achieved | p50 | p99 | p99.9 |
 |---|---|---|---|---|---|---|---|---|
-| 1 M/s | 1.00 M/s | 0.50 µs | 5.5 µs | 13 µs | 1.00 M/s | 0.35 µs | 2.2 µs | 10 µs |
-| 5 M/s | 5.00 M/s | 0.58 µs | 14 µs | 20 µs | 5.00 M/s | 0.24 µs | 6.3 µs | 14 µs |
-| 10 M/s | 8.96 M/s (falls behind) | — | — | — | 10.0 M/s | 0.24 µs | 9.9 µs | 33 µs |
+| 1 M/s | 1.00 M/s | 0.50 µs | 5.5 µs | 13 µs | 1.00 M/s | 0.21 µs | 1.7 µs | 7.4 µs |
+| 5 M/s | 5.00 M/s | 0.58 µs | 14 µs | 20 µs | 5.00 M/s | 0.20 µs | 3.1 µs | 10 µs |
+| 10 M/s | 8.96 M/s (falls behind) | — | — | — | 10.0 M/s | 0.21 µs | 5.4 µs | 10 µs |
+
+Flat out, the pipeline moves 9.1M requests/s on the M2 Pro and 22M on the
+EPYC VM.
 
 Neither machine is a production setup, and the numbers should be read that
 way:
@@ -361,6 +372,80 @@ way:
 On both, the p99 is set by OS and hypervisor interrupts rather than by the
 engine. A thread pinned to an isolated core (`isolcpus`, `nohz_full`) is what
 removes that tail.
+
+## ITCH 5.0 feed handler
+
+The books also run in reverse. A market-by-order feed handler rebuilds an
+exchange's books from its public feed. It has to reproduce each book exactly
+as reported, not re-match it: real books lock and cross during auctions and
+halts, and the exchange reports executions separately. So the book has two
+non-matching operations alongside its matching ones:
+
+- `insert()` rests an order at the back of its level, even through the
+  opposite side;
+- `reduce()` shrinks an order in place, keeping its queue position.
+
+The differential fuzzer covers both, in a scenario where the book is allowed
+to cross.
+
+`include/lob/itch.hpp` decodes the order-level messages:
+
+- add and add-with-attribution;
+- executed and executed-with-price;
+- cancel, delete and replace;
+- stock directory and system event.
+
+It reads straight from the big-endian wire layout and skips everything else
+by length. `parse()` walks NASDAQ's two-byte length framing and stops
+cleanly at an incomplete message, so a file can be fed in chunks.
+
+`include/lob/itch_book.hpp` maps each message onto a book operation:
+
+| ITCH message | Book operation |
+|---|---|
+| add (`A`, `F`) | `insert` |
+| executed (`E`, `C`) and partial cancel (`X`) | `reduce` |
+| delete (`D`) | `cancel` |
+| replace (`U`) | `cancel`, then `insert` at the back of the new level |
+
+A first pass sizes every book to its instrument's peak live orders, so the
+second pass never allocates. The books use the sorted-vector ladder. A dense
+tick ladder per instrument would need gigabytes: prices carry four decimals,
+and some resting orders sit absurdly far from the market.
+
+**How it is verified.** The round-trip test does three things:
+
+1. runs every workload profile through matching books;
+2. publishes what happened as the ITCH feed an exchange would emit for it
+   (`itch::synthesize`);
+3. rebuilds the books from that feed alone.
+
+Every instrument's rebuilt book must match the original order for order, in
+priority order. A second test checks one message against bytes laid out by
+hand from the spec, so a writer and parser that merely agree with each other
+would still fail.
+
+**Speed**, on a 17.8M-message synthetic feed over 16 interleaved instruments:
+
+| | M2 Pro | EPYC 9V45 VM |
+|---|---|---|
+| decode only | 261 M messages/s (3.8 ns each) | 318 M messages/s (3.1 ns each) |
+| rebuild, sorted-vector ladder | 26.3 M messages/s (38 ns each) | 21.8 M messages/s (46 ns each) |
+| rebuild, `std::map` ladder | 23.7 M messages/s | 19.1 M messages/s |
+
+NASDAQ publishes full trading days of ITCH 5.0 at
+[emi.nasdaq.com](https://emi.nasdaq.com/ITCH/Nasdaq%20ITCH/). A day is about
+5 GB gzipped and a few hundred million messages. The results here have not
+been produced from one of those files yet; to run one:
+
+```bash
+curl -O "https://emi.nasdaq.com/ITCH/Nasdaq%20ITCH/01302019.NASDAQ_ITCH50.gz"
+gunzip 01302019.NASDAQ_ITCH50.gz
+./build/tools/lob_itch replay 01302019.NASDAQ_ITCH50 --book both --top 20
+```
+
+`lob_itch` reports any message the books could not apply, such as an unknown
+reference or a reject. A consistent, complete day should report zero.
 
 ## Tools
 
@@ -390,6 +475,9 @@ lob> buy 7 120 @ 102 fok
   prefetch crossover.
 - `lob_pipeline`: the three-thread benchmark. Use `--rates`, `--batch`,
   `--symbols`, and `--cpus a,b,c` to pin on Linux.
+- `lob_itch replay|synth`: rebuilds every book from an ITCH 5.0 file (it
+  memory-maps the file, so a full day is fine), or writes a synthetic
+  multi-symbol feed from any workload profile.
 
 ## Layout
 
@@ -402,13 +490,14 @@ include/lob/
   flat_order_map.hpp       id index (std_order_map.hpp: unordered_map, for comparison)
   order_pool.hpp, order.hpp
   engine.hpp               multi-symbol routing
+  itch.hpp, itch_book.hpp  ITCH 5.0 decoding, writing, and book rebuilding
   replay.hpp               batch apply with software-pipelined prefetch
   spsc_queue.hpp           bounded lock-free queue
   messages.hpp, events.hpp, command.hpp, command_file.hpp, types.hpp
   workload.hpp, rng.hpp, latency_histogram.hpp, clock.hpp   benchmark support
 tests/                     unit, typed, differential and threaded tests; reference_book.hpp
 bench/                     lob_bench, lob_pipeline
-tools/                     lob_shell, lob_replay
+tools/                     lob_shell, lob_replay, lob_itch
 results/                   benchmark JSON from both machines
 scripts/                   mutation_check.py, plot_results.py
 ```
@@ -445,6 +534,8 @@ locally.
   costs shown above.
 - **Order ids are unique among live orders only.** The book does not
   remember ids that have filled or been cancelled.
+- **The ITCH handler is verified on synthetic feeds,** which exercise every
+  order message type it decodes, but not yet on a full NASDAQ day.
 
 ## License
 

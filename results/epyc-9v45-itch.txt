@@ -1,0 +1,8 @@
+synth.itch: 0.55 GB; capacity scan 0.60 s: 17 locates, 72336 peak live orders summed over instruments, 0 unknown references
+parse only: 318.3 M messages/s (3.1 ns each)
+
+sorted-vector ladder: 17776819 messages in 0.815 s = 21.8 M messages/s (45.8 ns each); books sized in 0.002 s
+  68206 orders resting across 16 instruments at the end; 0 inconsistencies
+
+std::map ladder: 17776819 messages in 0.929 s = 19.1 M messages/s (52.2 ns each); books sized in 0.001 s
+  68206 orders resting across 16 instruments at the end; 0 inconsistencies

@@ -19,6 +19,7 @@ struct Event {
   EventKind kind = EventKind::Accept;
   Side side = Side::Buy;      ///< Trade: aggressor side. Level: book side.
   std::uint8_t reason = 0;    ///< Reject: RejectReason. Cancel: CancelReason.
+  SymbolId symbol = 0;        ///< Set by engine-level listeners; zero for a standalone book.
   OrderId id = 0;             ///< Trade: aggressor.
   OrderId other = 0;          ///< Trade: resting order.
   Price price = 0;
@@ -29,6 +30,12 @@ struct Event {
   std::uint64_t total = 0;    ///< Level: total open quantity.
 
   friend bool operator==(const Event&, const Event&) = default;
+
+  [[nodiscard]] Event on(SymbolId s) const {
+    Event e = *this;
+    e.symbol = s;
+    return e;
+  }
 
   static Event accept(OrderId id) {
     Event e;
@@ -137,5 +144,6 @@ struct EventRecorder {
 };
 
 static_assert(BookListener<EventRecorder>);
+static_assert(sizeof(Event) == 56);
 
 }  // namespace lob

@@ -144,7 +144,7 @@ class OpGenerator {
 struct Coverage {
   std::uint64_t trades = 0;
   std::uint64_t modifies = 0;
-  std::uint64_t rejects[8] = {};
+  std::uint64_t rejects[16] = {};
   std::uint64_t cancels[4] = {};
 
   void count(const Event& e) {
@@ -159,7 +159,7 @@ struct Coverage {
   void merge(const Coverage& o) {
     trades += o.trades;
     modifies += o.modifies;
-    for (int i = 0; i < 8; ++i) rejects[i] += o.rejects[i];
+    for (int i = 0; i < 16; ++i) rejects[i] += o.rejects[i];
     for (int i = 0; i < 4; ++i) cancels[i] += o.cancels[i];
   }
 };
@@ -243,8 +243,8 @@ TYPED_TEST(Differential, TightBandEveryStpMode) {
     total.merge(run<TypeParam>(s, seed + static_cast<std::uint64_t>(stp)));
     if (this->HasFailure()) return;
   }
-  // Every reject and cancel path must have been reached at least once.
-  for (int r = 0; r < 8; ++r)
+  // Every reject and cancel path a book can take must have been reached at least once.
+  for (int r = 0; r <= static_cast<int>(RejectReason::UnknownOrder); ++r)
     EXPECT_GT(total.rejects[r], 0u) << to_string(static_cast<RejectReason>(r));
   for (int c = 0; c < 4; ++c)
     EXPECT_GT(total.cancels[c], 0u) << to_string(static_cast<CancelReason>(c));

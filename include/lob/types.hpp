@@ -50,6 +50,7 @@ enum class RejectReason : std::uint8_t {
   BookFull,          ///< No capacity left to rest the order.
   WouldCross,        ///< A post-only order would have taken liquidity.
   UnknownOrder,      ///< Cancel or modify for an id that is not resting.
+  UnknownSymbol,     ///< Engine-level: no book for the request's symbol.
 };
 
 enum class CancelReason : std::uint8_t {
@@ -96,6 +97,7 @@ enum class CancelReason : std::uint8_t {
     case RejectReason::BookFull: return "book-full";
     case RejectReason::WouldCross: return "would-cross";
     case RejectReason::UnknownOrder: return "unknown-order";
+    case RejectReason::UnknownSymbol: return "unknown-symbol";
   }
   return "?";
 }

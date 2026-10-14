@@ -22,13 +22,16 @@ include(GoogleTest)
 add_executable(lob_tests
   test_bench_support.cpp
   test_differential.cpp
+  test_engine.cpp
   test_flat_order_map.cpp
   test_hierarchical_bitset.cpp
   test_ladders.cpp
   test_order_book.cpp
   test_order_pool.cpp
   test_self_trade.cpp
+  test_spsc_queue.cpp
   test_types.cpp
 )
-target_link_libraries(lob_tests PRIVATE lob::lob lob_warnings GTest::gtest_main)
+find_package(Threads REQUIRED)
+target_link_libraries(lob_tests PRIVATE lob::lob lob_warnings GTest::gtest_main Threads::Threads)
 gtest_discover_tests(lob_tests DISCOVERY_MODE PRE_TEST PROPERTIES TIMEOUT 300)

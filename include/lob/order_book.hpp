@@ -23,6 +23,8 @@ struct BookConfig {
   Price max_price = 100'000;
   /// Capacity for resting orders.
   std::uint32_t max_orders = 1u << 20;
+  /// Self-trade prevention, applied to orders with a non-zero owner.
+  StpMode stp = StpMode::None;
 };
 
 /// Storage policy: which ladder holds each side's price levels and which map finds an order by
@@ -162,6 +164,7 @@ class OrderBook {
  private:
   struct MatchResult {
     Qty remaining;
+    bool self_trade;  ///< Matching stopped on a self-trade; the remainder must be cancelled.
   };
 
   static const BookConfig& validated(const BookConfig& config) {
@@ -229,11 +232,12 @@ class OrderBook {
 
     listener_.on_accept(o.id);
     const Price limit = market ? kMarketLimit<S> : o.price;
-    if (o.tif == TimeInForce::FOK && !fillable<S>(limit, o.qty))
+    if (o.tif == TimeInForce::FOK && !fillable<S>(o.owner, limit, o.qty))
       return listener_.on_cancel(o.id, o.qty, CancelReason::FillOrKill);
 
-    const MatchResult m = match<S>(o.id, limit, o.qty);
+    const MatchResult m = match<S>(o.id, o.owner, limit, o.qty);
     if (m.remaining == 0) return;
+    if (m.self_trade) return listener_.on_cancel(o.id, m.remaining, CancelReason::SelfTrade);
     if (!may_rest) return listener_.on_cancel(o.id, m.remaining, CancelReason::Unfilled);
 
     const OrderIdx idx = pool_.allocate();
@@ -255,42 +259,86 @@ class OrderBook {
     return !opp.empty() && crosses<S>(limit, opp.best_price());
   }
 
-  /// True if `qty` is available on the opposite side at prices `limit` or better: the fill-or-kill
-  /// precondition. Walks level aggregates only, so it costs one step per level crossed.
+  /// True if matching would fill `qty` in full at prices `limit` or better: the fill-or-kill
+  /// precondition. Without self-trade prevention it walks level aggregates only, one step per
+  /// level crossed. With it, the owner's own resting orders are not liquidity: they are skipped
+  /// under cancel-resting and end the walk otherwise, exactly as they would end matching. A FOK
+  /// that fails this check has no side effects at all, self-trade cancels included.
   template <Side S>
-  [[nodiscard]] bool fillable(Price limit, Qty qty) const noexcept {
+  [[nodiscard]] bool fillable(OwnerId owner, Price limit, Qty qty) const noexcept {
+    const bool stp = config_.stp != StpMode::None && owner != 0;
     std::uint64_t needed = qty;
     bool ok = false;
     ladder<opposite(S)>().for_each([&](Price px, const Level& lvl) {
       if (!crosses<S>(limit, px)) return false;
-      if (lvl.total >= needed) {
-        ok = true;
-        return false;
+      if (!stp) {
+        if (lvl.total >= needed) {
+          ok = true;
+          return false;
+        }
+        needed -= lvl.total;
+        return true;
       }
-      needed -= lvl.total;
+      for (OrderIdx i = lvl.head; i != kNil; i = pool_[i].next) {
+        const Order& r = pool_[i];
+        if (r.owner == owner) {
+          if (config_.stp == StpMode::CancelResting) continue;
+          return false;
+        }
+        if (r.qty >= needed) {
+          ok = true;
+          return false;
+        }
+        needed -= r.qty;
+      }
       return true;
     });
     return ok;
   }
 
-  /// Trades an incoming order on side S against the opposite side.
+  /// Trades an incoming order on side S against the opposite side, best price first and oldest
+  /// order first, until it is filled or the next level no longer crosses `limit`.
   template <Side S>
-  MatchResult match(OrderId id, Price limit, Qty qty) {
+  MatchResult match(OrderId id, OwnerId owner, Price limit, Qty qty) {
     constexpr Side O = opposite(S);
     auto& opp = ladder<O>();
+    const bool stp = config_.stp != StpMode::None && owner != 0;
 
     while (qty > 0 && !opp.empty()) {
       const Price px = opp.best_price();
       if (!crosses<S>(limit, px)) break;
       Level& lvl = opp.best_level();
+      bool touched = false;
+      bool stop = false;
 
       while (qty > 0 && lvl.head != kNil) {
         const OrderIdx ridx = lvl.head;
         Order& r = pool_[ridx];
+
+        if (stp && r.owner == owner) [[unlikely]] {
+          if (config_.stp == StpMode::CancelAggressor) {
+            stop = true;
+            break;
+          }
+          const OrderId rid = r.id;
+          const Qty rqty = r.qty;
+          unlink(r, lvl);
+          index_.erase(rid);
+          pool_.release(ridx);
+          touched = true;
+          listener_.on_cancel(rid, rqty, CancelReason::SelfTrade);
+          if (config_.stp == StpMode::CancelBoth) {
+            stop = true;
+            break;
+          }
+          continue;
+        }
+
         const Qty fill = std::min(qty, r.qty);
         qty -= fill;
         r.qty -= fill;
         lvl.total -= fill;
+        touched = true;
         listener_.on_trade(Trade{id, r.id, px, fill, qty, r.qty, S});
         if (r.qty == 0) {
           lvl.head = r.next;
@@ -305,10 +353,11 @@ class OrderBook {
         }
       }
 
-      listener_.on_level(O, px, lvl.total, lvl.count);
+      if (touched) listener_.on_level(O, px, lvl.total, lvl.count);
       if (lvl.count == 0) opp.erase_best();
+      if (stop) return MatchResult{qty, true};
     }
-    return MatchResult{qty};
+    return MatchResult{qty, false};
   }
 
   /// Places a pooled order at the back of its price level and reports the level.
@@ -403,10 +452,11 @@ class OrderBook {
 
     // The order stays allocated (and indexed) while it trades as an aggressor; it is linked into
     // no level, so it cannot match against itself.
-    const MatchResult m = match<S>(id, price, qty);
-    if (m.remaining == 0) {
+    const MatchResult m = match<S>(id, o.owner, price, qty);
+    if (m.remaining == 0 || m.self_trade) {
       index_.erase(id);
       pool_.release(idx);
+      if (m.self_trade) listener_.on_cancel(id, m.remaining, CancelReason::SelfTrade);
       return;
     }
     o.price = price;

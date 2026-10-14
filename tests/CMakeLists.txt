@@ -24,6 +24,7 @@ add_executable(lob_tests
   test_hierarchical_bitset.cpp
   test_order_book.cpp
   test_order_pool.cpp
+  test_self_trade.cpp
   test_types.cpp
 )
 target_link_libraries(lob_tests PRIVATE lob::lob lob_warnings GTest::gtest_main)

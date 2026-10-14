@@ -16,6 +16,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 option(LOB_BUILD_TESTS "Build the unit and differential tests" ${PROJECT_IS_TOP_LEVEL})
 option(LOB_BUILD_BENCH "Build the benchmarks" ${PROJECT_IS_TOP_LEVEL})
+option(LOB_BUILD_TOOLS "Build the command-line tools" ${PROJECT_IS_TOP_LEVEL})
 option(LOB_WERROR "Treat compiler warnings as errors" OFF)
 option(LOB_NATIVE "Tune code generation for the build machine's CPU" OFF)
 set(LOB_SANITIZE "" CACHE STRING "Sanitizers to enable, e.g. 'address,undefined' or 'thread'")
@@ -52,4 +53,8 @@ endif()
 
 if(LOB_BUILD_BENCH)
   add_subdirectory(bench)
+endif()
+
+if(LOB_BUILD_TOOLS)
+  add_subdirectory(tools)
 endif()

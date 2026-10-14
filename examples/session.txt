@@ -1,0 +1,29 @@
+# A short tour of the matching rules. Run: ./build/tools/lob_shell < examples/session.txt
+
+# Build a book: three asks and two bids.
+sell 1 100 @ 102
+sell 2 50 @ 101
+sell 3 75 @ 101
+buy 4 200 @ 99
+buy 5 40 @ 100
+book
+
+# A marketable buy takes the best price first, oldest order first at that price,
+# and rests what it cannot fill.
+buy 6 150 @ 101
+book
+
+# Fill-or-kill: 120 lots are not available at 102 or better, so nothing happens.
+buy 7 120 @ 102 fok
+
+# Post-only refuses to take liquidity.
+sell 8 10 @ 99 post
+
+# Reducing size keeps queue priority; changing price does not.
+modify 4 150 @ 99
+modify 5 40 @ 98
+orders
+
+# Market sell sweeps the bids; the unfilled remainder is cancelled.
+sell 9 500
+book

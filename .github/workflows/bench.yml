@@ -1,0 +1,48 @@
+name: bench
+
+# Benchmarks on a GitHub-hosted x86-64 runner. Shared cloud VMs are noisy, so treat these numbers
+# as a second platform's shape (TSC timer, pinned threads, a different cache hierarchy), not as a
+# best case. Run manually from the Actions tab or with `gh workflow run bench.yml`.
+
+on:
+  workflow_dispatch:
+    inputs:
+      requests:
+        description: Requests per workload
+        default: "5000000"
+
+jobs:
+  linux-x86:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Machine
+        run: |
+          lscpu
+          lscpu --extended
+          free -g
+
+      - name: Configure
+        run: >
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=clang++
+          -DLOB_NATIVE=ON -DLOB_BUILD_TESTS=OFF
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Order book benchmark
+        run: |
+          mkdir -p results
+          ./build/bench/lob_bench --requests ${{ inputs.requests }} --cpu 2 \
+            --json results/github-linux-x86-book.json
+
+      - name: Pipeline benchmark
+        run: |
+          ./build/bench/lob_pipeline --cpus 1,2,3 \
+            --json results/github-linux-x86-pipeline.json
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bench-results
+          path: results/

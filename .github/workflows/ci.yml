@@ -39,6 +39,8 @@ jobs:
         run: |
           ./build/bench/lob_bench --requests 200000 --reps 1 --workload balanced,cancel-heavy,sweep-heavy
           ./build/bench/lob_pipeline --requests 200000 --rates 1e6,max
+          ./build/tools/lob_shell < examples/session.txt > /dev/null
+          ./build/tools/lob_replay gen sweep-heavy 100000 smoke.bin && ./build/tools/lob_replay run smoke.bin
 
   sanitizers:
     name: ${{ matrix.name }}

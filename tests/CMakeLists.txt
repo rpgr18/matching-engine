@@ -21,6 +21,7 @@ include(GoogleTest)
 
 add_executable(lob_tests
   test_bench_support.cpp
+  test_command_file.cpp
   test_differential.cpp
   test_engine.cpp
   test_flat_order_map.cpp

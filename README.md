@@ -1,11 +1,444 @@
 # matching-engine
 
-A price-time priority limit order book and matching engine in C++20.
-
-Work in progress.
+A price-time priority limit order book and matching engine in C++20. It is
+header-only and does no allocation on the request path. It has been checked
+against a reference model over tens of millions of random requests, and it is
+benchmarked, not just described as fast.
 
 ```bash
-cmake -B build -G Ninja
+cmake -B build -G Ninja && cmake --build build && ctest --test-dir build
+./build/bench/lob_bench                       # throughput and per-request latency
+./build/tools/lob_shell < examples/session.txt  # watch the matching rules in action
+```
+
+| | Apple M2 Pro (1 core) | AMD EPYC 9V74, cloud VM (1 core) |
+|---|---|---|
+| Throughput, balanced flow | **56.2 M requests/s** (17.8 ns each) | **44.8 M requests/s** (22.3 ns each) |
+| Per-request latency, balanced flow | p50 ≤ 42 ns, **p99 ≤ 83 ns**, p99.9 ≤ 167 ns ¹ | p50 50 ns, **p99 131 ns**, p99.9 211 ns ² |
+| Throughput with 1M resting orders | **23.8 M requests/s** | **17.4 M requests/s** |
+| vs. `std::map` + `std::unordered_map` | 3.1× (balanced), 5.9× (1M orders) | 2.7× (balanced), 6.1× (1M orders) |
+| Gateway → engine → drop copy, 3 threads | 5 M requests/s sustained, p50 0.6 µs | 10 M requests/s sustained, p50 0.24 µs |
+
+¹ Apple silicon's counter ticks at 24 MHz, so each sample is a whole number of 41.67 ns ticks
+and a reading of 83 ns means the request took between 42 and 125 ns. Means are unbiased; the
+EPYC column has the precise percentiles.
+² Measured with the TSC. Each sample includes the timer's own cost (an empty timed interval
+reads 20 ns on this VM).
+
+---
+
+## What it does
+
+**Order types.** Limit orders rest until they are cancelled. IOC trades what it
+can and cancels the rest. FOK fills in full or not at all. Market orders are
+IOC with no price limit. Post-only orders are rejected rather than allowed to
+take liquidity. Each fill prints at the resting order's price, so an
+aggressor gets any price improvement.
+
+**Order management.** Cancel, plus cancel/replace with exchange queue-priority
+rules:
+
+- Reducing quantity at the same price keeps the order's place in the queue.
+- Increasing quantity sends it to the back of its level.
+- A new price sends it to the back of the new level, trading on the way in if
+  the new price crosses.
+- A replace that would let a post-only order take liquidity is rejected.
+
+**Self-trade prevention.** When an order would trade against a resting order
+from the same owner, the book can cancel the resting order, cancel the
+incoming remainder, or cancel both. The fill-or-kill check applies the same
+rules, so a FOK passes only if matching would really fill it. A killed FOK
+has no side effects.
+
+**Risk checks.** The book rejects:
+
+- prices outside a configured band,
+- zero quantity and order id 0,
+- duplicate live ids,
+- orders that could rest when the book is full.
+
+**Output.** Execution reports (accept, reject, trade with both sides' leaves
+quantity, cancel with reason, modify) and a market-by-price feed. Within one
+request, execution reports come before the level updates they cause. Each
+touched level is reported once, with its final state, not once per fill.
+
+**Multi-instrument.** `Engine` routes requests to one book per symbol by
+array index.
+
+## Design
+
+```
+            id ──▶ FlatOrderMap ──▶ OrderIdx (32-bit)
+                   open addressing,           │
+                   backward-shift delete      ▼
+                                       OrderPool: 40-byte slots, LIFO free list
+                                              │  prev/next links (intrusive FIFO)
+                                              ▼
+ DenseLadder<Buy>   ...[ L ][ L ][ L ][ L ]...   one Level per tick: head, tail,
+ DenseLadder<Sell>  ...[ L ][ L ][ L ][ L ]...   order count, total quantity
+                         ▲
+        HierarchicalBitset: which ticks are populated, 64-way summary tree
+```
+
+**Orders.** All orders live in one preallocated pool of 40-byte slots,
+addressed by 32-bit indices. Orders at a price form an intrusive doubly
+linked FIFO:
+
+- matching pops from the head,
+- new orders append at the tail,
+- a cancel unlinks in O(1).
+
+The free list is threaded through the same links, so allocating an order is
+a load and a store. Every page is touched at construction, so there are no
+page faults mid-session.
+
+**Finding an order by id** uses an open-addressing hash table:
+
+- linear probing over 16-byte slots, so a lookup is usually one cache line;
+- Fibonacci hashing, which spreads sequential exchange ids evenly;
+- at most half full, so there is always an empty slot to end a probe.
+
+Deletion uses backward shifting instead of tombstones. A cancel-heavy flow
+deletes almost as often as it inserts, and tombstones would lengthen probes
+until a rehash, which would be a latency spike. With backward shifting the
+table never degrades and never rehashes.
+
+**Price levels** are a flat array per side indexed by tick. Finding,
+creating and removing a level is an array access. The one non-constant step
+is finding the next level after the best one empties. A hierarchical bitset
+answers that in O(log₆₄ n) (at most two words per layer) without scanning
+the empty ticks between. The cost is memory proportional to the price band,
+so the band has to be bounded. Real venues bound it anyway with price
+collars.
+
+**Events are delivered through a template parameter**, so every callback is
+a direct call the compiler can inline. A listener that ignores an event costs
+nothing. There are no virtual calls, locks, exceptions or allocations on the
+request path.
+
+**The data structures are a policy.** `OrderBook<Listener, Traits>` takes its
+ladder and index from `Traits`. That is how the benchmark compares designs on
+identical order flow:
+
+| Policy | Ladder | Index |
+|---|---|---|
+| `DenseBookTraits` (default) | tick-indexed array + bitset | flat open addressing |
+| `VectorBookTraits` | sorted `std::vector`, best level at the back | flat open addressing |
+| `MapBookTraits` | `std::map` (red-black tree) | flat open addressing |
+| benchmark only | tick-indexed array + bitset | `std::unordered_map` |
+| benchmark only, "textbook" | `std::map` | `std::unordered_map` |
+
+## Correctness
+
+Fast and wrong is easy, so most of the testing effort goes into showing the
+book is right.
+
+- **258 tests** in GoogleTest. Every order-book and self-trade test runs
+  against all three ladder policies, which must behave identically.
+- **Differential fuzzing against a reference model.** `ReferenceBook`
+  (`tests/reference_book.hpp`) is an executable specification of the
+  matching rules. It is built on `std::map` and `std::list`, recomputes
+  aggregates from scratch, and shares no code with the real book. Two rules
+  are deliberately formulated differently there, so the implementations
+  cannot share a mistake:
+  - market orders use an explicit "no limit" flag rather than an extreme
+    price;
+  - fill-or-kill is decided by matching against a copy of the book.
+
+  Both books get the same random request stream. After every request their
+  event streams must be identical, and their full contents must match at
+  checkpoints. The streams include:
+  - every order type and STP mode;
+  - duplicate, zero and unknown ids;
+  - cancels that race fills, out-of-band prices, and a pool small enough to
+    fill up.
+
+  Three scenarios run: a tight band under constant crossing, a deep book
+  with long queues, and a wide sparse band that makes the bitset climb
+  several layers. Each scenario asserts it reached every reject and cancel
+  reason. A soak run of **36 million requests found zero divergences**.
+- **Mutation testing.** `scripts/mutation_check.py` injects eight plausible
+  bugs one at a time and confirms the suite catches every one. Examples: an
+  off-by-one in the hash table's backward shift, a missed aggregate update,
+  a wrong FOK boundary.
+- **Sanitizers in CI.** ASan+UBSan and TSan run the full suite with
+  assertions enabled. Every push also builds with `-Werror` under GCC,
+  Clang and Apple Clang.
+
+```bash
+LOB_FUZZ_OPS=10000000 ./build/tests/lob_tests --gtest_filter='Differential*'   # soak
+python3 scripts/mutation_check.py                                             # 8/8 caught
+```
+
+## Performance
+
+### Method
+
+**Workloads.** Each workload is generated once by a deterministic flow
+model, as a flat array of 32-byte commands. The timed loop does nothing but
+read the next command and apply it. The model works like this:
+
+- A reference price takes a random walk.
+- Passive orders rest a geometrically distributed distance behind it, so
+  liquidity is thickest near the touch.
+- Takers cross with marketable limits, IOCs and market orders.
+- Cancels and modifies target orders that are live at that moment.
+
+| Workload | Mix (add / take / cancel / modify) | Shape |
+|---|---|---|
+| balanced | 52 / 4 / 39 / 5 % | 4.2k resting orders over 116 levels, 0.16 trades per request |
+| cancel-heavy | 50 / 1 / 46 / 2 % | 2k orders within ~3 ticks of the touch, 10 cancels per trade |
+| sweep-heavy | 61 / 4 / 28 / 6 % | thin book; a taker that trades sweeps 2.4 levels on average |
+| deep-book | 49 / 4 / 42 / 5 % | 967k resting orders over 6.2k levels; the working set is far larger than cache |
+
+**Throughput** is the median of five timed replays of 5M requests on a fresh
+book, after an untimed warm-up replay.
+
+**Latency** comes from a separate replay that timestamps every request with
+the CPU counter. The timestamps cost a few nanoseconds each and would
+distort the throughput figure. Percentiles come from an HdrHistogram-style
+log-linear histogram, accurate to 0.8%. They are reported at bucket upper
+edges, so a quoted percentile is never optimistic.
+
+**Every implementation must produce bit-identical output** for a workload,
+checked through a running hash of every trade. A data structure that is
+faster but wrong fails the run.
+
+### Throughput
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/throughput-dark.svg">
+  <img alt="Throughput by storage design for four workloads" src="docs/img/throughput-light.svg">
+</picture>
+
+Million requests per second, one core:
+
+| | M2 Pro | | | | EPYC 9V74 VM | | | |
+|---|---|---|---|---|---|---|---|---|
+| **design** | balanced | cancel-heavy | sweep-heavy | deep-book | balanced | cancel-heavy | sweep-heavy | deep-book |
+| dense + flat (default) | **56.2** | **58.4** | **54.1** | 15.7 | **44.8** | **49.1** | **43.8** | 8.4 |
+| + prefetching replay | 56.2 | 58.2 | 53.2 | **23.8** | 44.6 | 48.6 | 43.3 | **17.4** |
+| sorted vector + flat | 35.4 | 39.4 | 35.3 | 7.6 | 26.9 | 32.3 | 26.5 | 6.0 |
+| `std::map` + flat | 30.3 | 35.0 | 27.1 | 8.9 | 25.4 | 30.3 | 21.9 | 5.5 |
+| dense + `unordered_map` | 25.3 | 31.2 | 31.3 | 4.8 | 23.7 | 26.9 | 24.6 | 3.6 |
+| `std::map` + `unordered_map` | 18.1 | 23.3 | 19.5 | 4.1 | 16.9 | 20.3 | 15.7 | 2.8 |
+
+GitHub's runner pool mixes CPU generations. An earlier run of the same code
+landed on a Zen 3 EPYC 7763 and measured 33.4M requests/s with a 121 ns p99
+on balanced flow. Both runs are kept in `results/`.
+
+What the comparison shows:
+
+- **The index matters as much as the ladder.** In three of the four
+  workloads, swapping the flat table for `std::unordered_map` costs more
+  than swapping the dense ladder for a red-black tree. Every `unordered_map`
+  insert allocates a node, and every lookup chases a pointer into it. The
+  exception is sweep-heavy, where levels are created and destroyed
+  constantly and the tree allocates a node for every new one.
+- **The sorted vector is a real contender near the touch.** It reaches about
+  60% of the dense ladder's throughput while the book is shallow. It
+  collapses with a deep book, where inserting a level far from the touch is
+  a `memmove`.
+- **At a million orders everything is memory-bound.** The ranking survives,
+  but the gap widens to 3.9× on the M2 and 2.9× on the EPYC, before
+  prefetching.
+
+### Latency per request
+
+From the EPYC run, which has a sub-nanosecond timer, for the default design.
+Nanoseconds per request, including about 20 ns of timer cost per sample:
+
+| | p50 | p90 | p99 | p99.9 | p99.99 |
+|---|---|---|---|---|---|
+| balanced | 50 | 60 | 131 | 211 | 371 |
+| cancel-heavy | 50 | 60 | 70 | 171 | 302 |
+| sweep-heavy | 50 | 60 | 161 | 362 | 671 |
+| deep-book, prefetching | 70 | 131 | 291 | 1,017 | 2,613 |
+
+By request type (balanced, EPYC):
+
+- a passive add takes 51 ns on average;
+- a cancel takes 56 ns;
+- an add that trades takes 82 ns, because it emits fills and level updates
+  for the opposite side.
+
+On the M2 Pro the same breakdown is 30, 38 and 56 ns. Those figures are
+unbiased means, even though the M2's individual samples are quantized to
+41.67 ns.
+
+### Prefetching for books that outgrow the cache
+
+With a million resting orders, a cancel is a chain of dependent cache
+misses: the index slot, then the order it points to, then that order's
+queue neighbours and price level. `replay()` (`include/lob/replay.hpp`)
+applies a batch with a three-stage software pipeline. While request *i* is
+applied, it starts the index-slot fetch for request *i*+16, looks up and
+fetches the order for *i*+10, and fetches the neighbours and level for
+*i*+4. By the time each request runs, its misses are already in flight. The
+results are identical to applying requests one at a time, and tests check
+that across every workload.
+
+The hints are not free, so `lob_bench --depth-sweep` measures where they
+pay:
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/img/prefetch-dark.svg">
+  <img alt="Throughput with prefetching off and on by number of resting orders" src="docs/img/prefetch-light.svg">
+</picture>
+
+| resting orders | 8.7k | 26k | 91k | 188k | 382k | 979k |
+|---|---|---|---|---|---|---|
+| prefetching off | 55.2 | 52.2 | 48.6 | 32.8 | 19.7 | 15.9 |
+| prefetching on | 33.8 | 32.3 | 31.9 | 30.0 | 26.4 | 23.8 |
+| adaptive (default) | 54.5 | 50.9 | 49.1 | 34.3 | 26.6 | 23.8 |
+
+While the book is cache resident, prefetching costs about a third of
+throughput. Past roughly 200k orders it wins, by +50% at a million on the
+M2 Pro and +108% on the EPYC VM, where misses are more expensive. So
+`replay()` checks the book's size every 1,024 requests and prefetches only
+above 262,144 resting orders. The lookahead distances came from sweeping
+them on the deep book, where gains plateau from about 16 requests out.
+
+### Three-thread pipeline
+
+```
+gateway ──SPSC──▶ engine ──SPSC──▶ drop copy
+          32 B           64 B
+         requests      events
+```
+
+`lob_pipeline` runs the engine as a real service:
+
+- A gateway thread replays a four-symbol stream at a fixed offered rate.
+- An engine thread applies requests to a multi-symbol `Engine` and publishes
+  every execution report and market-data update.
+- A drop-copy thread consumes them and records latency at each request's
+  final message.
+
+Latency runs from each request's *scheduled* send time, which travels with
+the request and its events. If any stage stalls, the gateway falls behind
+schedule, and every request the stall delayed is charged for it. Measuring
+from the actual send would hide exactly those stalls (coordinated omission).
+
+The queue is a bounded SPSC ring:
+
+- head and tail sit on separate 128-byte lines;
+- each side keeps a private copy of the other's index, so the shared line is
+  read only when the queue looks full or empty;
+- the producer can stage many elements and publish them with one release
+  store.
+
+That last point is what made the difference. Publishing once per batch of
+consumed requests, instead of once per request, raised the M2's sustainable
+rate from 2M to 5M requests/s. Every publish hands the tail's cache line to
+the polling consumer.
+
+Gateway to drop copy, balanced flow over 4 symbols, 2.2 events per request:
+
+| offered load | M2 Pro: achieved | p50 | p99 | p99.9 | EPYC VM: achieved | p50 | p99 | p99.9 |
+|---|---|---|---|---|---|---|---|---|
+| 1 M/s | 1.00 M/s | 0.50 µs | 5.5 µs | 13 µs | 1.00 M/s | 0.35 µs | 2.2 µs | 10 µs |
+| 5 M/s | 5.00 M/s | 0.58 µs | 14 µs | 20 µs | 5.00 M/s | 0.24 µs | 6.3 µs | 14 µs |
+| 10 M/s | 8.96 M/s (falls behind) | — | — | — | 10.0 M/s | 0.24 µs | 9.9 µs | 33 µs |
+
+Neither machine is a production setup, and the numbers should be read that
+way:
+
+- **M2 Pro.** macOS cannot pin threads, and the M2 Pro's eight performance
+  cores sit in two clusters with separate L2 caches. A queue whose threads
+  land on different clusters pays a cross-cluster transfer for every cache
+  line.
+- **EPYC VM.** The GitHub runner is a shared VM with two physical cores, so
+  two of the three pinned threads are hyperthread siblings.
+
+On both, the p99 is set by OS and hypervisor interrupts rather than by the
+engine. A thread pinned to an isolated core (`isolcpus`, `nohz_full`) is what
+removes that tail.
+
+## Tools
+
+```
+$ ./build/tools/lob_shell
+lob> sell 1 100 @ 102
+lob> sell 2 50 @ 101
+lob> sell 3 75 @ 101
+lob> buy 6 150 @ 101
+  accepted #6
+  TRADE 50 @ 101  #6 (buys, 100 left) x #2 (resting, 0 left)
+  TRADE 75 @ 101  #6 (buys, 25 left) x #3 (resting, 0 left)
+    level ask 101: 0 lots in 0 orders
+    level bid 101: 25 lots in 1 orders
+lob> buy 7 120 @ 102 fok
+  accepted #7
+  cancelled #7, 120 lots (fill-or-kill)
+```
+
+- `lob_shell`: an interactive book that prints every event. It also reads
+  scripts on stdin; `examples/session.txt` tours the matching rules.
+- `lob_replay gen|run`: records a workload to a binary command file (a
+  48-byte header plus raw 32-byte records) or replays one. It reports
+  timing, an outcome breakdown and the final depth ladder.
+- `lob_bench`: single-threaded throughput and latency. Use `--workload` and
+  `--impl` to select, `--json` for results, and `--depth-sweep` for the
+  prefetch crossover.
+- `lob_pipeline`: the three-thread benchmark. Use `--rates`, `--batch`,
+  `--symbols`, and `--cpus a,b,c` to pin on Linux.
+
+## Layout
+
+```
+include/lob/
+  order_book.hpp           the book: validation, matching, cancel, replace, STP, queries
+  dense_ladder.hpp         tick-indexed levels + hierarchical_bitset.hpp
+  vector_ladder.hpp        sorted-vector levels       } alternative policies,
+  map_ladder.hpp           std::map levels            } same interface
+  flat_order_map.hpp       id index (std_order_map.hpp: unordered_map, for comparison)
+  order_pool.hpp, order.hpp
+  engine.hpp               multi-symbol routing
+  replay.hpp               batch apply with software-pipelined prefetch
+  spsc_queue.hpp           bounded lock-free queue
+  messages.hpp, events.hpp, command.hpp, command_file.hpp, types.hpp
+  workload.hpp, rng.hpp, latency_histogram.hpp, clock.hpp   benchmark support
+tests/                     unit, typed, differential and threaded tests; reference_book.hpp
+bench/                     lob_bench, lob_pipeline
+tools/                     lob_shell, lob_replay
+results/                   benchmark JSON from both machines
+scripts/                   mutation_check.py, plot_results.py
+```
+
+## Building
+
+CMake 3.21+ and a C++20 compiler. CI builds with GCC 13, Clang 18 and Apple
+Clang, all with `-Werror`. GoogleTest is fetched at a pinned version and hash.
+
+```bash
+cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release   # Release is the default
 cmake --build build
 ctest --test-dir build
+
+cmake -B build-asan -DLOB_SANITIZE=address,undefined -DCMAKE_BUILD_TYPE=RelWithDebInfo
+cmake -B build-native -DLOB_NATIVE=ON               # -march=native / -mcpu=native
 ```
+
+The x86 numbers above come from `.github/workflows/bench.yml`, which anyone
+can run from the Actions tab. The M2 Pro numbers come from running
+`lob_bench`, `lob_bench --depth-sweep` and `lob_pipeline` with `--json`
+locally.
+
+## Limitations
+
+- **One thread per book, by design.** Matching is inherently sequential per
+  instrument. Scaling comes from sharding symbols across engine threads, not
+  from locking a book.
+- **No wire protocol or persistence.** There is no FIX/OUCH gateway, journal
+  or recovery. The binary command format is the stand-in for a sequenced
+  input stream, and replaying it is deterministic.
+- **The dense ladder needs a bounded price band** (up to 2²⁵ ticks per side).
+  Instruments that need an unbounded band can use `MapBookTraits` at the
+  costs shown above.
+- **Order ids are unique among live orders only.** The book does not
+  remember ids that have filled or been cancelled.
+
+## License
+
+MIT

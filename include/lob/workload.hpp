@@ -23,6 +23,8 @@ struct WorkloadSpec {
   std::string name = "balanced";
   std::uint64_t requests = 1'000'000;
   std::uint64_t seed = 1;
+  /// Passive orders added before the measured stream, so it starts from a populated book.
+  std::uint64_t prefill = 0;
 
   // Request mix, as relative weights. The cancel weight is multiplied by live / target_depth.
   double w_add = 0.48;
@@ -58,7 +60,9 @@ struct WorkloadStats {
 
 struct Workload {
   WorkloadSpec spec;
+  /// The first `prefill` commands build the starting book; the rest are the measured stream.
   std::vector<Command> commands;
+  std::size_t prefill = 0;
   WorkloadStats stats;
 };
 
@@ -124,7 +128,7 @@ struct GeneratorListener {
 [[nodiscard]] inline Workload generate(const WorkloadSpec& spec) {
   Workload w;
   w.spec = spec;
-  w.commands.reserve(spec.requests);
+  w.commands.reserve(spec.prefill + spec.requests);
 
   detail::LiveSet live;
   detail::GeneratorListener listener{&live};
@@ -144,6 +148,26 @@ struct GeneratorListener {
     return spec.owners ? static_cast<OwnerId>(1 + rng.below(spec.owners)) : 0;
   };
   auto qty = [&](double mean) { return static_cast<Qty>(1 + rng.geometric(mean - 1)); };
+  auto passive = [&]() {
+    NewOrder o;
+    o.id = next_id++;
+    o.side = rng.chance(0.5) ? Side::Buy : Side::Sell;
+    const auto d = static_cast<Price>(rng.geometric(spec.depth_mean));
+    o.price = clamp_price(o.side == Side::Buy ? ref - 1 - d : ref + 1 + d);
+    o.qty = qty(spec.qty_mean);
+    o.owner = owner();
+    return Command::add(o);
+  };
+
+  for (std::uint64_t n = 0; n < spec.prefill; ++n) {
+    const Command cmd = passive();
+    apply(book, cmd);
+    if (book.find(cmd.id)) live.insert(cmd.id);
+    w.commands.push_back(cmd);
+  }
+  w.prefill = w.commands.size();
+  listener.trades = 0;
+  listener.rejects = 0;
 
   for (std::uint64_t n = 0; n < spec.requests; ++n) {
     if (rng.chance(spec.move_prob)) ref = std::clamp(ref + (rng.chance(0.5) ? 1 : -1), lo, hi);
@@ -155,14 +179,7 @@ struct GeneratorListener {
 
     Command cmd;
     if (roll < spec.w_add) {
-      NewOrder o;
-      o.id = next_id++;
-      o.side = rng.chance(0.5) ? Side::Buy : Side::Sell;
-      const auto d = static_cast<Price>(rng.geometric(spec.depth_mean));
-      o.price = clamp_price(o.side == Side::Buy ? ref - 1 - d : ref + 1 + d);
-      o.qty = qty(spec.qty_mean);
-      o.owner = owner();
-      cmd = Command::add(o);
+      cmd = passive();
       ++w.stats.adds;
     } else if (roll < spec.w_add + spec.w_take) {
       NewOrder o;
@@ -257,6 +274,7 @@ struct GeneratorListener {
   WorkloadSpec deep = balanced;
   deep.name = "deep-book";
   deep.target_depth = 1'000'000;
+  deep.prefill = 1'000'000;
   deep.depth_mean = 400;
   deep.move_prob = 0.002;
   deep.seed = 4;

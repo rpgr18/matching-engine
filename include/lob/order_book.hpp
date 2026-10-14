@@ -80,6 +80,24 @@ class OrderBook {
     }
   }
 
+  /// Changes a resting order's price and open quantity (cancel/replace).
+  ///
+  /// Reducing quantity at the same price keeps the order's place in the queue. Any other change
+  /// costs it: more quantity sends it to the back of its level, and a new price sends it to the
+  /// back of the new level, trading on the way in if the new price crosses. A replace that would
+  /// let a post-only order take liquidity is rejected and the order is left as it was.
+  void modify(OrderId id, Price price, Qty qty) {
+    const OrderIdx idx = lookup(id);
+    if (idx == kNil) return listener_.on_reject(id, RejectReason::UnknownOrder);
+    if (qty == 0) return listener_.on_reject(id, RejectReason::InvalidQuantity);
+    if (!in_band(price)) return listener_.on_reject(id, RejectReason::PriceOutOfBand);
+    if (pool_[idx].side == Side::Buy) {
+      modify_impl<Side::Buy>(idx, price, qty);
+    } else {
+      modify_impl<Side::Sell>(idx, price, qty);
+    }
+  }
+
   // ---- Queries. None of these are on the matching path. ----
 
   [[nodiscard]] std::optional<Price> best_bid() const noexcept { return best<Side::Buy>(); }
@@ -293,11 +311,18 @@ class OrderBook {
     return MatchResult{qty};
   }
 
-  /// Appends a pooled order to the back of its price level.
+  /// Places a pooled order at the back of its price level and reports the level.
   template <Side S>
   void rest(OrderIdx idx) {
     Order& o = pool_[idx];
     Level& lvl = ladder<S>().insert(o.price);
+    append(idx, lvl);
+    listener_.on_level(S, o.price, lvl.total, lvl.count);
+  }
+
+  /// Links a pooled order at the tail of `lvl`'s queue.
+  void append(OrderIdx idx, Level& lvl) noexcept {
+    Order& o = pool_[idx];
     o.prev = lvl.tail;
     o.next = kNil;
     if (lvl.tail != kNil) {
@@ -308,7 +333,6 @@ class OrderBook {
     lvl.tail = idx;
     ++lvl.count;
     lvl.total += o.qty;
-    listener_.on_level(S, o.price, lvl.total, lvl.count);
   }
 
   /// Removes a pooled order from its level's queue, leaving the level in place even if empty.
@@ -343,6 +367,51 @@ class OrderBook {
     listener_.on_cancel(id, qty, CancelReason::Requested);
     listener_.on_level(S, px, lvl.total, lvl.count);
     if (lvl.count == 0) lad.erase(px);
+  }
+
+  template <Side S>
+  void modify_impl(OrderIdx idx, Price price, Qty qty) {
+    Order& o = pool_[idx];
+    auto& own = ladder<S>();
+
+    if (price == o.price) {
+      // The book is never crossed, so a resting price cannot trade: no matching needed.
+      Level& lvl = own.at(price);
+      if (qty > o.qty) {
+        unlink(o, lvl);
+        o.qty = qty;
+        append(idx, lvl);
+      } else {
+        lvl.total -= o.qty - qty;
+        o.qty = qty;
+      }
+      listener_.on_modify(o.id, price, qty);
+      listener_.on_level(S, price, lvl.total, lvl.count);
+      return;
+    }
+
+    if ((o.flags & order_flags::kPostOnly) && would_cross<S>(price))
+      return listener_.on_reject(o.id, RejectReason::WouldCross);
+
+    const OrderId id = o.id;
+    const Price old_price = o.price;
+    listener_.on_modify(id, price, qty);
+    Level& old_lvl = own.at(old_price);
+    unlink(o, old_lvl);
+    listener_.on_level(S, old_price, old_lvl.total, old_lvl.count);
+    if (old_lvl.count == 0) own.erase(old_price);
+
+    // The order stays allocated (and indexed) while it trades as an aggressor; it is linked into
+    // no level, so it cannot match against itself.
+    const MatchResult m = match<S>(id, price, qty);
+    if (m.remaining == 0) {
+      index_.erase(id);
+      pool_.release(idx);
+      return;
+    }
+    o.price = price;
+    o.qty = m.remaining;
+    rest<S>(idx);
   }
 
   BookConfig config_;

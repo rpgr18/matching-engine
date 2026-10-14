@@ -30,6 +30,10 @@ class OrderBookTest : public ::testing::Test {
     book.cancel(id);
     return rec.take();
   }
+  Events modify(OrderId id, Price price, Qty qty) {
+    book.modify(id, price, qty);
+    return rec.take();
+  }
 
   EventRecorder rec;
   Book book{config(), rec};
@@ -202,6 +206,88 @@ TEST_F(OrderBookTest, CancellingBestLevelPromotesNextLevel) {
   EXPECT_EQ(book.best_ask(), 105);
   cancel(2);
   EXPECT_FALSE(book.best_ask());
+}
+
+// ---------------------------------------------------------------------------------------------
+// Modify (cancel/replace)
+
+TEST_F(OrderBookTest, ReducingQuantityKeepsQueuePriority) {
+  submit(sell(1, 10, 5));
+  submit(sell(2, 10, 5));
+  EXPECT_EQ(modify(1, 10, 3), (Events{E::modify(1, 10, 3), E::level(Side::Sell, 10, 8, 2)}));
+  EXPECT_EQ(resting(book, Side::Sell), (std::vector<Resting>{{1, 10, 3}, {2, 10, 5}}));
+  submit(buy(3, 10, 3));
+  EXPECT_EQ(resting(book, Side::Sell), (std::vector<Resting>{{2, 10, 5}}));
+}
+
+TEST_F(OrderBookTest, IncreasingQuantityLosesQueuePriority) {
+  submit(sell(1, 10, 5));
+  submit(sell(2, 10, 5));
+  EXPECT_EQ(modify(1, 10, 8), (Events{E::modify(1, 10, 8), E::level(Side::Sell, 10, 13, 2)}));
+  EXPECT_EQ(resting(book, Side::Sell), (std::vector<Resting>{{2, 10, 5}, {1, 10, 8}}));
+}
+
+TEST_F(OrderBookTest, ModifyToSameTermsIsAcceptedInPlace) {
+  submit(sell(1, 10, 5));
+  submit(sell(2, 10, 5));
+  EXPECT_EQ(modify(1, 10, 5), (Events{E::modify(1, 10, 5), E::level(Side::Sell, 10, 10, 2)}));
+  EXPECT_EQ(resting(book, Side::Sell), (std::vector<Resting>{{1, 10, 5}, {2, 10, 5}}));
+}
+
+TEST_F(OrderBookTest, PriceChangeMovesOrderToBackOfNewLevel) {
+  submit(sell(1, 10, 5));
+  submit(sell(2, 11, 4));
+  EXPECT_EQ(modify(1, 11, 5), (Events{E::modify(1, 11, 5), E::level(Side::Sell, 10, 0, 0),
+                                      E::level(Side::Sell, 11, 9, 2)}));
+  EXPECT_EQ(resting(book, Side::Sell), (std::vector<Resting>{{2, 11, 4}, {1, 11, 5}}));
+  EXPECT_EQ(book.best_ask(), 11);
+  EXPECT_EQ(book.level_count(Side::Sell), 1u);
+}
+
+TEST_F(OrderBookTest, PriceChangeThatCrossesTradesThenRests) {
+  submit(buy(1, 100, 5));
+  submit(sell(2, 105, 3));
+  EXPECT_EQ(modify(1, 105, 5),
+            (Events{E::modify(1, 105, 5), E::level(Side::Buy, 100, 0, 0),
+                    E::trade(fill(1, 2, 105, 3, 2, 0, Side::Buy)), E::level(Side::Sell, 105, 0, 0),
+                    E::level(Side::Buy, 105, 2, 1)}));
+  EXPECT_EQ(book.best_bid(), 105);
+  EXPECT_EQ(book.find(1)->qty, 2u);
+}
+
+TEST_F(OrderBookTest, PriceChangeThatFillsCompletelyRemovesTheOrder) {
+  submit(buy(1, 100, 5));
+  submit(sell(2, 105, 9));
+  modify(1, 106, 5);
+  EXPECT_EQ(book.find(1), nullptr);
+  EXPECT_EQ(book.order_count(), 1u);
+  EXPECT_EQ(book.find(2)->qty, 4u);
+  EXPECT_EQ(cancel(1), (Events{E::reject(1, RejectReason::UnknownOrder)}));
+}
+
+TEST_F(OrderBookTest, InvalidModifyLeavesOrderUntouched) {
+  submit(buy(1, 100, 5));
+  EXPECT_EQ(modify(2, 100, 5), (Events{E::reject(2, RejectReason::UnknownOrder)}));
+  EXPECT_EQ(modify(1, 100, 0), (Events{E::reject(1, RejectReason::InvalidQuantity)}));
+  EXPECT_EQ(modify(1, 5000, 5), (Events{E::reject(1, RejectReason::PriceOutOfBand)}));
+  EXPECT_EQ(resting(book, Side::Buy), (std::vector<Resting>{{1, 100, 5}}));
+}
+
+TEST_F(OrderBookTest, PostOnlyReplaceThatWouldCrossIsRejected) {
+  submit(post_only(1, Side::Buy, 100, 5));
+  submit(sell(2, 103, 5));
+  EXPECT_EQ(modify(1, 103, 5), (Events{E::reject(1, RejectReason::WouldCross)}));
+  EXPECT_EQ(resting(book, Side::Buy), (std::vector<Resting>{{1, 100, 5}}));
+  EXPECT_EQ(modify(1, 102, 5), (Events{E::modify(1, 102, 5), E::level(Side::Buy, 100, 0, 0),
+                                       E::level(Side::Buy, 102, 5, 1)}));
+}
+
+TEST_F(OrderBookTest, MovingTheBestLevelAwayPromotesTheNext) {
+  submit(sell(1, 10, 1));
+  submit(sell(2, 12, 1));
+  modify(1, 13, 1);
+  EXPECT_EQ(book.best_ask(), 12);
+  EXPECT_EQ(book.depth(Side::Sell, 5), (std::vector<LevelInfo>{{12, 1, 1}, {13, 1, 1}}));
 }
 
 // ---------------------------------------------------------------------------------------------

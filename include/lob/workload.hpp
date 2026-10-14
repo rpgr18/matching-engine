@@ -15,10 +15,12 @@ namespace lob {
 /// Parameters of a synthetic order flow.
 ///
 /// The model: a reference price takes a random walk; passive orders rest at a geometrically
-/// distributed distance behind it, so liquidity is thickest at the touch and thins out with
-/// depth; takers cross the spread with marketable limits, IOCs or market orders, sometimes deep
-/// enough to sweep several levels; cancels and modifies target live orders chosen uniformly.
-/// The cancel rate scales with live depth, which holds the book near `target_depth` orders.
+/// distributed distance behind it (and never through the opposite touch), so liquidity is
+/// thickest near the touch and thins out with depth; takers cross the spread with marketable
+/// limits, IOCs or market orders, large enough to sweep several levels when the book is thin;
+/// cancels and modifies target live orders chosen uniformly, and a re-priced order stays passive.
+/// Every trade therefore comes from a taker. The cancel rate scales with live depth, which holds
+/// the book near `target_depth` orders.
 struct WorkloadSpec {
   std::string name = "balanced";
   std::uint64_t requests = 1'000'000;
@@ -28,8 +30,8 @@ struct WorkloadSpec {
 
   // Request mix, as relative weights. The cancel weight is multiplied by live / target_depth.
   double w_add = 0.48;
-  double w_take = 0.07;
-  double w_cancel = 0.40;
+  double w_take = 0.04;
+  double w_cancel = 0.43;
   double w_modify = 0.05;
 
   std::uint32_t target_depth = 5'000;  ///< Resting orders the book settles around.
@@ -54,6 +56,8 @@ struct WorkloadStats {
   std::uint64_t modifies = 0;
   std::uint64_t trades = 0;
   std::uint64_t rejects = 0;
+  std::uint64_t takes_filled = 0;  ///< Takers that traded at least once.
+  std::uint64_t take_levels = 0;   ///< Price levels those takers traded at, summed.
   double mean_depth = 0;   ///< Average resting orders, sampled across the run.
   double mean_levels = 0;  ///< Average populated price levels, both sides.
 };
@@ -72,7 +76,7 @@ struct Workload {
   BookConfig c;
   c.min_price = spec.min_price;
   c.max_price = spec.max_price;
-  c.max_orders = std::max<std::uint32_t>(1u << 12, spec.target_depth * 4);
+  c.max_orders = std::max<std::uint32_t>(1u << 12, spec.target_depth * 2);
   return c;
 }
 
@@ -108,10 +112,14 @@ struct GeneratorListener {
   LiveSet* live;
   std::uint64_t trades = 0;
   std::uint64_t rejects = 0;
+  std::uint64_t request_levels = 0;  ///< Distinct trade prices in the current request.
+  Price last_price = 0;
 
   void on_accept(OrderId) {}
   void on_reject(OrderId, RejectReason) { ++rejects; }
   void on_trade(const Trade& t) {
+    if (request_levels == 0 || t.price != last_price) ++request_levels;
+    last_price = t.price;
     ++trades;
     if (t.resting_leaves == 0) live->erase(t.resting);
     if (t.aggressor_leaves == 0) live->erase(t.aggressor);
@@ -148,12 +156,21 @@ struct GeneratorListener {
     return spec.owners ? static_cast<OwnerId>(1 + rng.below(spec.owners)) : 0;
   };
   auto qty = [&](double mean) { return static_cast<Qty>(1 + rng.geometric(mean - 1)); };
+  // Keeps a price on the passive side of the opposite touch.
+  auto passive_price = [&](Side side, Price p) {
+    if (side == Side::Buy) {
+      if (const auto ask = book.best_ask()) p = std::min(p, *ask - 1);
+    } else {
+      if (const auto bid = book.best_bid()) p = std::max(p, *bid + 1);
+    }
+    return clamp_price(p);
+  };
   auto passive = [&]() {
     NewOrder o;
     o.id = next_id++;
     o.side = rng.chance(0.5) ? Side::Buy : Side::Sell;
     const auto d = static_cast<Price>(rng.geometric(spec.depth_mean));
-    o.price = clamp_price(o.side == Side::Buy ? ref - 1 - d : ref + 1 + d);
+    o.price = passive_price(o.side, o.side == Side::Buy ? ref - 1 - d : ref + 1 + d);
     o.qty = qty(spec.qty_mean);
     o.owner = owner();
     return Command::add(o);
@@ -208,16 +225,21 @@ struct GeneratorListener {
       if (rng.chance(spec.reduce_share)) {
         cmd = Command::modify(id, o.price, static_cast<Qty>(1 + rng.below(o.qty)));
       } else {
-        // Re-quote one to three ticks away from the touch or towards it.
+        // Re-quote one to three ticks away from the touch or towards it, staying passive.
         const auto step = static_cast<Price>(1 + rng.below(3));
-        cmd = Command::modify(id, clamp_price(rng.chance(0.5) ? o.price + step : o.price - step),
-                              o.qty);
+        const Price moved = rng.chance(0.5) ? o.price + step : o.price - step;
+        cmd = Command::modify(id, passive_price(o.side, moved), o.qty);
       }
       ++w.stats.modifies;
     }
 
+    listener.request_levels = 0;
     apply(book, cmd);
     if (cmd.type != CommandType::Cancel && book.find(cmd.id)) live.insert(cmd.id);
+    if (listener.request_levels > 0 && roll >= spec.w_add && roll < spec.w_add + spec.w_take) {
+      ++w.stats.takes_filled;
+      w.stats.take_levels += listener.request_levels;
+    }
     w.commands.push_back(cmd);
 
     if ((n & 1023) == 0) {
@@ -243,29 +265,31 @@ struct GeneratorListener {
   balanced.requests = requests;
   out.push_back(balanced);
 
-  // Market-maker heavy flow, closer to what lit equity venues see: almost every order is
-  // cancelled before it trades and liquidity sits within a few ticks of the touch.
+  // Market-maker heavy flow, closer to what lit equity venues see: liquidity sits within a few
+  // ticks of the touch and is cancelled roughly ten times as often as it trades.
   WorkloadSpec cancels = balanced;
   cancels.name = "cancel-heavy";
   cancels.w_add = 0.50;
-  cancels.w_take = 0.015;
-  cancels.w_cancel = 0.46;
-  cancels.w_modify = 0.025;
+  cancels.w_take = 0.012;
+  cancels.w_cancel = 0.465;
+  cancels.w_modify = 0.023;
   cancels.target_depth = 2'000;
   cancels.depth_mean = 3;
   cancels.seed = 2;
   out.push_back(cancels);
 
-  // Aggressive flow: large takers that sweep several levels per order.
+  // A thin book and large takers: each taker that trades sweeps between two and three price
+  // levels on average, so level creation, removal and best-price recovery dominate.
   WorkloadSpec sweeps = balanced;
   sweeps.name = "sweep-heavy";
-  sweeps.w_add = 0.50;
-  sweeps.w_take = 0.18;
-  sweeps.w_cancel = 0.27;
-  sweeps.w_modify = 0.05;
-  sweeps.take_qty_mean = 120;
+  sweeps.w_add = 0.60;
+  sweeps.w_take = 0.04;
+  sweeps.w_cancel = 0.30;
+  sweeps.w_modify = 0.06;
+  sweeps.target_depth = 600;
+  sweeps.depth_mean = 10;
+  sweeps.take_qty_mean = 150;
   sweeps.sweep_mean = 4;
-  sweeps.depth_mean = 4;
   sweeps.seed = 3;
   out.push_back(sweeps);
 

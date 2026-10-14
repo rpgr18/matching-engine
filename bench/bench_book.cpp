@@ -254,9 +254,11 @@ void print_workload(const Workload& w) {
               w.spec.name.c_str(), with_commas(n).c_str(), 100.0 * static_cast<double>(s.adds) / n,
               100.0 * static_cast<double>(s.takes) / n, 100.0 * static_cast<double>(s.cancels) / n,
               100.0 * static_cast<double>(s.modifies) / n);
-  std::printf("  %.3f trades/request, %s resting orders over %s price levels on average\n\n",
-              static_cast<double>(s.trades) / n, with_commas(s.mean_depth).c_str(),
-              with_commas(s.mean_levels).c_str());
+  const double takers = static_cast<double>(std::max<std::uint64_t>(1, s.takes_filled));
+  std::printf("  %.3f trades/request, %.1f price levels per taker that traded, %s resting orders over "
+              "%s levels on average\n\n",
+              static_cast<double>(s.trades) / n, static_cast<double>(s.take_levels) / takers,
+              with_commas(s.mean_depth).c_str(), with_commas(s.mean_levels).c_str());
   std::printf("  %-12s %8s %8s %8s | %7s %7s %7s %7s %8s %9s   latency, ns\n", "impl", "Mreq/s",
               "best", "ns/req", "p50", "p90", "p99", "p99.9", "p99.99", "max");
 }
@@ -316,6 +318,7 @@ void write_json(const std::string& path, const Options& opt, const std::string& 
     out << "    {\"name\": \"" << w.spec.name << "\", \"requests\": " << w.spec.requests
         << ", \"adds\": " << s.adds << ", \"takes\": " << s.takes << ", \"cancels\": " << s.cancels
         << ", \"modifies\": " << s.modifies << ", \"trades\": " << s.trades
+        << ", \"takes_filled\": " << s.takes_filled << ", \"take_levels\": " << s.take_levels
         << ", \"mean_depth\": " << s.mean_depth << ", \"mean_levels\": " << s.mean_levels
         << ",\n     \"results\": [\n";
     for (std::size_t j = 0; j < results.size(); ++j) {

@@ -26,6 +26,31 @@ inline NewOrder sell(OrderId id, Price price, Qty qty, OwnerId owner = 0) {
   return limit(id, Side::Sell, price, qty, owner);
 }
 
+inline NewOrder ioc(OrderId id, Side side, Price price, Qty qty, OwnerId owner = 0) {
+  NewOrder o = limit(id, side, price, qty, owner);
+  o.tif = TimeInForce::IOC;
+  return o;
+}
+
+inline NewOrder fok(OrderId id, Side side, Price price, Qty qty, OwnerId owner = 0) {
+  NewOrder o = limit(id, side, price, qty, owner);
+  o.tif = TimeInForce::FOK;
+  return o;
+}
+
+inline NewOrder market(OrderId id, Side side, Qty qty, OwnerId owner = 0) {
+  NewOrder o = limit(id, side, 0, qty, owner);
+  o.type = OrderType::Market;
+  o.tif = TimeInForce::IOC;
+  return o;
+}
+
+inline NewOrder post_only(OrderId id, Side side, Price price, Qty qty, OwnerId owner = 0) {
+  NewOrder o = limit(id, side, price, qty, owner);
+  o.post_only = true;
+  return o;
+}
+
 using Events = std::vector<Event>;
 
 /// Every resting order of one side in priority order, as (id, price, qty) triples.

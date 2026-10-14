@@ -24,7 +24,7 @@ enum class Side : std::uint8_t { Buy, Sell };
 
 enum class OrderType : std::uint8_t {
   Limit,   ///< Trades at the limit price or better.
-  Market,  ///< Trades at any price and never rests.
+  Market,  ///< Trades at any price. Never rests: any remainder is cancelled, as for IOC.
 };
 
 enum class TimeInForce : std::uint8_t {

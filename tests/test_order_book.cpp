@@ -205,6 +205,134 @@ TEST_F(OrderBookTest, CancellingBestLevelPromotesNextLevel) {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Market and immediate-or-cancel
+
+TEST_F(OrderBookTest, MarketOrderSweepsAndCancelsTheRemainder) {
+  submit(sell(1, 101, 2));
+  submit(sell(2, 102, 3));
+  EXPECT_EQ(submit(market(3, Side::Buy, 10)),
+            (Events{E::accept(3), E::trade(fill(3, 1, 101, 2, 8, 0, Side::Buy)),
+                    E::level(Side::Sell, 101, 0, 0), E::trade(fill(3, 2, 102, 3, 5, 0, Side::Buy)),
+                    E::level(Side::Sell, 102, 0, 0), E::cancel(3, 5, CancelReason::Unfilled)}));
+  EXPECT_FALSE(book.best_bid()) << "market orders never rest";
+  EXPECT_EQ(book.order_count(), 0u);
+}
+
+TEST_F(OrderBookTest, MarketOrderIntoEmptySideIsCancelled) {
+  submit(buy(1, 100, 5));
+  EXPECT_EQ(submit(market(2, Side::Buy, 5)),
+            (Events{E::accept(2), E::cancel(2, 5, CancelReason::Unfilled)}));
+}
+
+TEST_F(OrderBookTest, MarketOrderIgnoresPriceAndBand) {
+  submit(buy(1, 1, 5));
+  NewOrder m = market(2, Side::Sell, 5);
+  m.price = 999'999;  // far outside the band; irrelevant for a market order
+  EXPECT_EQ(submit(m), (Events{E::accept(2), E::trade(fill(2, 1, 1, 5, 0, 0, Side::Sell)),
+                               E::level(Side::Buy, 1, 0, 0)}));
+}
+
+TEST_F(OrderBookTest, MarketOrderWithGtcStillNeverRests) {
+  NewOrder m = market(1, Side::Buy, 5);
+  m.tif = TimeInForce::GTC;
+  EXPECT_EQ(submit(m), (Events{E::accept(1), E::cancel(1, 5, CancelReason::Unfilled)}));
+  EXPECT_EQ(book.order_count(), 0u);
+}
+
+TEST_F(OrderBookTest, IocTradesWhatItCanAtItsLimitAndCancelsTheRest) {
+  submit(sell(1, 100, 3));
+  submit(sell(2, 101, 3));
+  EXPECT_EQ(submit(ioc(3, Side::Buy, 100, 5)),
+            (Events{E::accept(3), E::trade(fill(3, 1, 100, 3, 2, 0, Side::Buy)),
+                    E::level(Side::Sell, 100, 0, 0), E::cancel(3, 2, CancelReason::Unfilled)}));
+  EXPECT_EQ(book.best_ask(), 101);
+  EXPECT_FALSE(book.best_bid());
+}
+
+TEST_F(OrderBookTest, NonCrossingIocIsCancelledWhole) {
+  submit(sell(1, 105, 3));
+  EXPECT_EQ(submit(ioc(2, Side::Buy, 104, 5)),
+            (Events{E::accept(2), E::cancel(2, 5, CancelReason::Unfilled)}));
+}
+
+TEST(OrderBookCapacity, IocNeedsNoCapacityBecauseItCannotRest) {
+  BookConfig c;
+  c.max_orders = 1;
+  EventRecorder rec;
+  OrderBook<EventRecorder> book(c, rec);
+  book.add(sell(1, 100, 5));
+  rec.take();
+  book.add(ioc(2, Side::Buy, 100, 2));
+  EXPECT_EQ(rec.take(), (Events{E::accept(2), E::trade(Trade{2, 1, 100, 2, 0, 3, Side::Buy}),
+                                E::level(Side::Sell, 100, 3, 1)}));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Fill or kill
+
+TEST_F(OrderBookTest, FokFillsInFullAcrossLevels) {
+  submit(sell(1, 100, 2));
+  submit(sell(2, 101, 3));
+  submit(sell(3, 102, 9));
+  EXPECT_EQ(submit(fok(4, Side::Buy, 101, 5)),
+            (Events{E::accept(4), E::trade(fill(4, 1, 100, 2, 3, 0, Side::Buy)),
+                    E::level(Side::Sell, 100, 0, 0), E::trade(fill(4, 2, 101, 3, 0, 0, Side::Buy)),
+                    E::level(Side::Sell, 101, 0, 0)}));
+  EXPECT_EQ(book.best_ask(), 102);
+}
+
+TEST_F(OrderBookTest, FokThatCannotFillInFullLeavesTheBookUntouched) {
+  submit(sell(1, 100, 2));
+  submit(sell(2, 101, 3));
+  submit(sell(3, 102, 9));  // beyond the limit, so it must not count
+  const auto before = resting(book, Side::Sell);
+  EXPECT_EQ(submit(fok(4, Side::Buy, 101, 6)),
+            (Events{E::accept(4), E::cancel(4, 6, CancelReason::FillOrKill)}));
+  EXPECT_EQ(resting(book, Side::Sell), before);
+}
+
+TEST_F(OrderBookTest, MarketFokCountsEveryLevel) {
+  submit(buy(1, 100, 2));
+  submit(buy(2, 50, 3));
+  EXPECT_EQ(submit(fok(3, Side::Sell, 0, 6)).back(), E::reject(3, RejectReason::PriceOutOfBand))
+      << "a limit FOK still needs a price in the band";
+  NewOrder m = market(3, Side::Sell, 6);
+  m.tif = TimeInForce::FOK;
+  EXPECT_EQ(submit(m), (Events{E::accept(3), E::cancel(3, 6, CancelReason::FillOrKill)}));
+  m.qty = 5;
+  EXPECT_EQ(submit(m).size(), 5u);  // accept, two trades, two level updates
+  EXPECT_FALSE(book.best_bid());
+}
+
+// ---------------------------------------------------------------------------------------------
+// Post-only
+
+TEST_F(OrderBookTest, PostOnlyRestsWhenItWouldNotTrade) {
+  submit(sell(1, 101, 5));
+  EXPECT_EQ(submit(post_only(2, Side::Buy, 100, 5)),
+            (Events{E::accept(2), E::level(Side::Buy, 100, 5, 1)}));
+  EXPECT_EQ(book.find(2)->flags, order_flags::kPostOnly);
+}
+
+TEST_F(OrderBookTest, PostOnlyThatWouldTakeLiquidityIsRejected) {
+  submit(sell(1, 101, 5));
+  EXPECT_EQ(submit(post_only(2, Side::Buy, 101, 5)),
+            (Events{E::reject(2, RejectReason::WouldCross)}));
+  EXPECT_EQ(submit(post_only(3, Side::Buy, 150, 5)),
+            (Events{E::reject(3, RejectReason::WouldCross)}));
+  EXPECT_EQ(book.find(1)->qty, 5u);
+}
+
+TEST_F(OrderBookTest, PostOnlyRequiresARestingOrderType) {
+  NewOrder a = post_only(1, Side::Buy, 100, 5);
+  a.tif = TimeInForce::IOC;
+  EXPECT_EQ(submit(a), (Events{E::reject(1, RejectReason::InvalidOrderType)}));
+  NewOrder b = market(2, Side::Buy, 5);
+  b.post_only = true;
+  EXPECT_EQ(submit(b), (Events{E::reject(2, RejectReason::InvalidOrderType)}));
+}
+
+// ---------------------------------------------------------------------------------------------
 // Validation
 
 TEST_F(OrderBookTest, RejectsInvalidRequests) {

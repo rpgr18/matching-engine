@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <vector>
@@ -197,20 +198,61 @@ class OrderBook {
   void add_impl(const NewOrder& o) {
     if (o.id == 0) return listener_.on_reject(o.id, RejectReason::InvalidOrderId);
     if (o.qty == 0) return listener_.on_reject(o.id, RejectReason::InvalidQuantity);
-    if (o.type != OrderType::Limit || o.tif != TimeInForce::GTC || o.post_only)
+    const bool market = o.type == OrderType::Market;
+    if (o.post_only && (market || o.tif != TimeInForce::GTC))
       return listener_.on_reject(o.id, RejectReason::InvalidOrderType);
-    if (!in_band(o.price)) return listener_.on_reject(o.id, RejectReason::PriceOutOfBand);
+    if (!market && !in_band(o.price)) return listener_.on_reject(o.id, RejectReason::PriceOutOfBand);
     if (index_.contains(o.id)) return listener_.on_reject(o.id, RejectReason::DuplicateOrderId);
-    if (pool_.full()) return listener_.on_reject(o.id, RejectReason::BookFull);
+    // Market orders never rest, whatever their time in force says.
+    const bool may_rest = !market && o.tif == TimeInForce::GTC;
+    if (may_rest && pool_.full()) return listener_.on_reject(o.id, RejectReason::BookFull);
+    if (o.post_only && would_cross<S>(o.price))
+      return listener_.on_reject(o.id, RejectReason::WouldCross);
 
     listener_.on_accept(o.id);
-    const MatchResult m = match<S>(o.id, o.price, o.qty);
+    const Price limit = market ? kMarketLimit<S> : o.price;
+    if (o.tif == TimeInForce::FOK && !fillable<S>(limit, o.qty))
+      return listener_.on_cancel(o.id, o.qty, CancelReason::FillOrKill);
+
+    const MatchResult m = match<S>(o.id, limit, o.qty);
     if (m.remaining == 0) return;
+    if (!may_rest) return listener_.on_cancel(o.id, m.remaining, CancelReason::Unfilled);
 
     const OrderIdx idx = pool_.allocate();
-    pool_[idx] = Order{o.id, o.price, m.remaining, kNil, kNil, o.owner, S, 0};
+    const std::uint8_t flags = o.post_only ? order_flags::kPostOnly : 0;
+    pool_[idx] = Order{o.id, o.price, m.remaining, kNil, kNil, o.owner, S, flags};
     index_.insert(o.id, idx);
     rest<S>(idx);
+  }
+
+  /// A market order is matched as a limit order at the most aggressive representable price.
+  template <Side S>
+  static constexpr Price kMarketLimit =
+      S == Side::Buy ? std::numeric_limits<Price>::max() : std::numeric_limits<Price>::min();
+
+  /// True if a limit order on side S at `limit` would trade on arrival.
+  template <Side S>
+  [[nodiscard]] bool would_cross(Price limit) const noexcept {
+    const auto& opp = ladder<opposite(S)>();
+    return !opp.empty() && crosses<S>(limit, opp.best_price());
+  }
+
+  /// True if `qty` is available on the opposite side at prices `limit` or better: the fill-or-kill
+  /// precondition. Walks level aggregates only, so it costs one step per level crossed.
+  template <Side S>
+  [[nodiscard]] bool fillable(Price limit, Qty qty) const noexcept {
+    std::uint64_t needed = qty;
+    bool ok = false;
+    ladder<opposite(S)>().for_each([&](Price px, const Level& lvl) {
+      if (!crosses<S>(limit, px)) return false;
+      if (lvl.total >= needed) {
+        ok = true;
+        return false;
+      }
+      needed -= lvl.total;
+      return true;
+    });
+    return ok;
   }
 
   /// Trades an incoming order on side S against the opposite side.

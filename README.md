@@ -139,7 +139,7 @@ identical order flow:
 Fast and wrong is easy, so most of the testing effort goes into showing the
 book is right.
 
-- **281 tests** in GoogleTest. Every order-book and self-trade test runs
+- **286 tests** in GoogleTest. Every order-book and self-trade test runs
   against all three ladder policies, which must behave identically.
 - **Differential fuzzing against a reference model.** `ReferenceBook`
   (`tests/reference_book.hpp`) is an executable specification of the

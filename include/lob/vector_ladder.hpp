@@ -30,7 +30,9 @@ class VectorLadder {
   static constexpr int kLinearScan = 8;
 
  public:
-  VectorLadder(Price /*min_price*/, Price /*max_price*/) { levels_.reserve(4096); }
+  /// Starts small: a feed handler holds thousands of these, most with a handful of levels, and
+  /// the array grows geometrically when a book needs more.
+  VectorLadder(Price /*min_price*/, Price /*max_price*/) { levels_.reserve(64); }
 
   [[nodiscard]] bool empty() const noexcept { return levels_.empty(); }
   [[nodiscard]] std::size_t size() const noexcept { return levels_.size(); }

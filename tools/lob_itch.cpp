@@ -1,7 +1,14 @@
 // lob_itch: rebuild every order book from a NASDAQ TotalView-ITCH 5.0 file, or make a synthetic one.
 //
 //   lob_itch replay <file> [--book vector|map|both] [--top N]
+//                   [--verify] [--at HH:MM:SS] [--symbols A,B,...]
 //   lob_itch synth <out> [--symbols K] [--requests N] [--workload NAME]
+//
+// --verify replays the feed once more, untimed, and checks the rebuilt books against two things
+// NASDAQ guarantees during continuous trading: displayed orders execute in price-time priority,
+// so an execution should hit the order at the front of its side's best level; and its displayed
+// book never stays crossed, since a crossing order would have matched. --at prints the listed
+// symbols' books as they stood at that time of day.
 //
 // NASDAQ publishes full trading days at https://emi.nasdaq.com/ITCH/Nasdaq%20ITCH/ as gzipped
 // files of length-prefixed messages; gunzip one and pass it to replay. A day is several billion
@@ -37,6 +44,7 @@ using Clock = std::chrono::steady_clock;
 int usage() {
   std::fprintf(stderr,
                "usage: lob_itch replay <file> [--book vector|map|both] [--top N]\n"
+               "                       [--verify] [--at HH:MM:SS] [--symbols A,B,...]\n"
                "       lob_itch synth <out> [--symbols K] [--requests N] [--workload NAME]\n");
   return 2;
 }
@@ -139,16 +147,212 @@ void rebuild(const char* label, const Mapping& file, const itch::Capacity& cap, 
   }
 }
 
+constexpr std::uint64_t kSecond = 1'000'000'000;
+
+std::string clock_time(std::uint64_t ns) {
+  char buf[32];
+  const std::uint64_t s = ns / kSecond;
+  std::snprintf(buf, sizeof(buf), "%02llu:%02llu:%02llu.%03llu",
+                static_cast<unsigned long long>(s / 3600),
+                static_cast<unsigned long long>(s / 60 % 60),
+                static_cast<unsigned long long>(s % 60),
+                static_cast<unsigned long long>(ns % kSecond / 1'000'000));
+  return buf;
+}
+
+/// Wraps a BookBuilder, checking the rebuilt books against the exchange's own rules as the feed
+/// is applied.
+template <class Builder>
+class Verifier : public itch::NullHandler {
+ public:
+  struct Tally {
+    std::uint64_t executions = 0;
+    std::uint64_t at_best = 0;   ///< executed order was at its side's best price
+    std::uint64_t at_front = 0;  ///< ...and first in that level's queue
+    std::uint64_t messages = 0;
+    std::uint64_t crossed = 0;   ///< bid > ask after the message
+    std::uint64_t locked = 0;    ///< bid == ask after the message
+  };
+
+  Verifier(Builder& b, std::uint64_t at, std::vector<std::string> symbols)
+      : b_(b), at_(at), symbols_(std::move(symbols)) {}
+
+  void on_system_event(const itch::SystemEvent& m) { tick(m.h.timestamp); }
+  void on_stock_directory(const itch::StockDirectory& m) {
+    tick(m.h.timestamp);
+    b_.on_stock_directory(m);
+  }
+  void on_add(const itch::AddOrder& m) {
+    tick(m.h.timestamp);
+    b_.on_add(m);
+    after(m.h);
+  }
+  void on_executed(const itch::OrderExecuted& m) {
+    tick(m.h.timestamp);
+    check(m);
+    b_.on_executed(m);
+    after(m.h);
+  }
+  void on_cancel(const itch::OrderCancel& m) {
+    tick(m.h.timestamp);
+    b_.on_cancel(m);
+    after(m.h);
+  }
+  void on_delete(const itch::OrderDelete& m) {
+    tick(m.h.timestamp);
+    b_.on_delete(m);
+    after(m.h);
+  }
+  void on_replace(const itch::OrderReplace& m) {
+    tick(m.h.timestamp);
+    b_.on_replace(m);
+    after(m.h);
+  }
+
+  Tally continuous;               ///< 09:30:01 to 15:59:59, clear of the opening and closing crosses
+  Tally outside;                  ///< everything else
+  std::uint64_t with_price = 0;   ///< 'C' executions, which print away from the order's price
+  std::uint64_t not_found = 0;
+
+ private:
+  static bool in_session(std::uint64_t ts) {
+    return ts >= (9 * 3600 + 30 * 60 + 1) * kSecond && ts <= (15 * 3600 + 59 * 60 + 59) * kSecond;
+  }
+
+  void check(const itch::OrderExecuted& m) {
+    if (m.with_price) {
+      ++with_price;
+      return;
+    }
+    if (m.h.locate >= b_.instruments()) return;
+    const auto& book = b_.engine().book(m.h.locate);
+    const Order* o = book.find(m.ref);
+    if (o == nullptr) {
+      ++not_found;
+      return;
+    }
+    Tally& t = in_session(m.h.timestamp) ? continuous : outside;
+    ++t.executions;
+    const auto best = o->side == Side::Buy ? book.best_bid() : book.best_ask();
+    if (best && *best == o->price) {
+      ++t.at_best;
+      t.at_front += o->prev == kNil;
+    }
+  }
+
+  void after(const itch::Header& h) {
+    if (h.locate >= b_.instruments()) return;
+    Tally& t = in_session(h.timestamp) ? continuous : outside;
+    ++t.messages;
+    const auto& book = b_.engine().book(h.locate);
+    const auto bid = book.best_bid();
+    const auto ask = book.best_ask();
+    if (bid && ask) {
+      t.crossed += *bid > *ask;
+      t.locked += *bid == *ask;
+    }
+  }
+
+  void tick(std::uint64_t ts) {
+    if (snapped_ || at_ == 0 || ts < at_) return;
+    snapped_ = true;
+    for (const std::string& sym : symbols_) {
+      for (std::size_t l = 0; l < b_.instruments(); ++l) {
+        const auto locate = static_cast<std::uint16_t>(l);
+        if (b_.name(locate) != sym) continue;
+        const auto& book = b_.engine().book(locate);
+        const auto bids = book.depth(Side::Buy, 5);
+        const auto asks = book.depth(Side::Sell, 5);
+        std::printf("\n  %s at %s (%zu resting orders)\n", sym.c_str(), clock_time(ts).c_str(),
+                    book.order_count());
+        std::printf("    %16s %12s | %-12s %-16s\n", "bid shares", "bid", "ask", "ask shares");
+        for (std::size_t i = 0; i < std::max(bids.size(), asks.size()); ++i) {
+          std::printf("    %16s %12s | %-12s %-16s\n",
+                      i < bids.size() ? std::to_string(bids[i].total).c_str() : "",
+                      i < bids.size() ? price(bids[i].price).c_str() : "",
+                      i < asks.size() ? price(asks[i].price).c_str() : "",
+                      i < asks.size() ? std::to_string(asks[i].total).c_str() : "");
+        }
+      }
+    }
+  }
+
+  Builder& b_;
+  std::uint64_t at_;
+  std::vector<std::string> symbols_;
+  bool snapped_ = false;
+};
+
+double pct(std::uint64_t a, std::uint64_t b) {
+  return b ? 100.0 * static_cast<double>(a) / static_cast<double>(b) : 0.0;
+}
+
+void verify(const Mapping& file, const itch::Capacity& cap, std::uint64_t at,
+            const std::vector<std::string>& symbols) {
+  itch::NullEngineListener none;
+  itch::BookBuilder<> builder(none, cap);
+  Verifier<itch::BookBuilder<>> v(builder, at, symbols);
+  itch::parse(file.data(), file.size(), v);
+
+  std::printf("\nverification (untimed replay):\n");
+  std::printf("  inconsistencies: %llu (unknown references, rejects)\n",
+              static_cast<unsigned long long>(builder.inconsistencies()));
+  for (const auto* t : {&v.continuous, &v.outside}) {
+    std::printf("  %s:\n", t == &v.continuous ? "continuous trading, 09:30:01-15:59:59"
+                                               : "outside continuous trading");
+    std::printf("    executions: %llu; at the best price %.3f%%; at the front of the best level "
+                "%.3f%%\n",
+                static_cast<unsigned long long>(t->executions), pct(t->at_best, t->executions),
+                pct(t->at_front, t->executions));
+    std::printf("    order messages: %llu; book crossed after %llu (%.4f%%), locked after %llu "
+                "(%.4f%%)\n",
+                static_cast<unsigned long long>(t->messages),
+                static_cast<unsigned long long>(t->crossed), pct(t->crossed, t->messages),
+                static_cast<unsigned long long>(t->locked), pct(t->locked, t->messages));
+  }
+  std::printf("  'C' executions (printed away from the order price, not checked): %llu\n",
+              static_cast<unsigned long long>(v.with_price));
+}
+
+std::uint64_t parse_time(const std::string& s) {
+  unsigned h = 0, m = 0, sec = 0;
+  if (std::sscanf(s.c_str(), "%u:%u:%u", &h, &m, &sec) != 3) throw std::runtime_error("bad --at");
+  return (std::uint64_t{h} * 3600 + m * 60 + sec) * kSecond;
+}
+
+std::vector<std::string> split(const std::string& s) {
+  std::vector<std::string> out;
+  std::size_t start = 0;
+  while (start <= s.size()) {
+    const std::size_t comma = s.find(',', start);
+    const std::size_t end = comma == std::string::npos ? s.size() : comma;
+    if (end > start) out.push_back(s.substr(start, end - start));
+    if (comma == std::string::npos) break;
+    start = comma + 1;
+  }
+  return out;
+}
+
 int replay(int argc, char** argv) {
   if (argc < 3) return usage();
   std::string book = "vector";
   std::size_t top = 10;
+  bool check = false;
+  std::uint64_t at = 0;
+  std::vector<std::string> symbols;
   for (int i = 3; i < argc; ++i) {
     const std::string a = argv[i];
     if (a == "--book" && i + 1 < argc) {
       book = argv[++i];
     } else if (a == "--top" && i + 1 < argc) {
       top = std::strtoull(argv[++i], nullptr, 10);
+    } else if (a == "--verify") {
+      check = true;
+    } else if (a == "--at" && i + 1 < argc) {
+      at = parse_time(argv[++i]);
+      check = true;
+    } else if (a == "--symbols" && i + 1 < argc) {
+      symbols = split(argv[++i]);
     } else {
       return usage();
     }
@@ -189,6 +393,7 @@ int replay(int argc, char** argv) {
 
   if (book == "vector" || book == "both") rebuild<VectorBookTraits>("sorted-vector", file, cap, top);
   if (book == "map" || book == "both") rebuild<MapBookTraits>("std::map", file, cap, top);
+  if (check) verify(file, cap, at, symbols);
   return 0;
 }
 

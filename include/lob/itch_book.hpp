@@ -168,6 +168,7 @@ class BookBuilder : public NullHandler {
 
   BookBuilder(Listener& listener, const Capacity& capacity, double headroom = 1.1)
       : counter_{&listener}, engine_(counter_) {
+    static_assert(EngineListener<detail::RejectCounter<Listener>>);
     names_.resize(capacity.peak_orders.size());
     for (std::uint32_t peak : capacity.peak_orders) {
       BookConfig c;
@@ -220,6 +221,11 @@ class BookBuilder : public NullHandler {
     book.cancel(m.old_ref);
     book.insert(o);
   }
+
+  // The engine holds a reference to counter_, so a moved or copied builder would report to the
+  // wrong object.
+  BookBuilder(const BookBuilder&) = delete;
+  BookBuilder& operator=(const BookBuilder&) = delete;
 
   [[nodiscard]] const Engine& engine() const noexcept { return engine_; }
   [[nodiscard]] const std::string& name(std::uint16_t locate) const { return names_.at(locate); }
@@ -312,7 +318,9 @@ struct SyntheticFeed {
       auto& refs = feed.ref_of[k];
       const auto ref_for = [&](OrderId id) { return (std::uint64_t{k} << 40) | id; };
 
-      const Order* before = c.type == CommandType::Add ? nullptr : in.book->find(c.id);
+      const Order* before = in.book->find(c.id);
+      // An add whose id is already resting is rejected and must not appear in the feed.
+      const bool add_of_live_id = c.type == CommandType::Add && before != nullptr;
       const Price p0 = before ? before->price : 0;
       const Qty q0 = before ? before->qty : 0;
       in.rec.trades.clear();
@@ -332,7 +340,7 @@ struct SyntheticFeed {
 
       const Order* after = in.book->find(c.id);
       if (c.type == CommandType::Add) {
-        if (after) {
+        if (after && !add_of_live_id) {
           refs[c.id] = ref_for(c.id);
           w.add_order(in.locate, ++ts, refs[c.id], after->side, after->qty, in.symbol,
                       static_cast<std::uint32_t>(after->price));

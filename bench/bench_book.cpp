@@ -127,6 +127,9 @@ ReplayOptions replay_options() {
   if (const char* v = std::getenv("LOB_PREFETCH")) {
     std::sscanf(v, "%td,%td,%td,%zu", &o.slot_distance, &o.order_distance,
                 &o.neighbour_distance, &o.min_orders);
+    if (!(0 < o.neighbour_distance && o.neighbour_distance <= o.order_distance &&
+          o.order_distance <= o.slot_distance && o.order_distance - o.neighbour_distance < 64))
+      die("LOB_PREFETCH: need 0 < neighbour <= order <= slot, and order - neighbour < 64");
   }
   return o;
 }

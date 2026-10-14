@@ -113,9 +113,12 @@ class SpscQueue {
     return n;
   }
 
-  /// Approximate when called concurrently; exact when both sides are quiescent.
+  /// Approximate when called concurrently; exact when both sides are quiescent. Head is read
+  /// first: it never passes the tail, so a tail read afterwards is at least as large and the
+  /// difference cannot underflow, even from a third thread.
   [[nodiscard]] std::size_t size() const noexcept {
-    return tail_.load(std::memory_order_acquire) - head_.load(std::memory_order_acquire);
+    const std::size_t head = head_.load(std::memory_order_acquire);
+    return tail_.load(std::memory_order_acquire) - head;
   }
   [[nodiscard]] bool empty() const noexcept { return size() == 0; }
   [[nodiscard]] std::size_t capacity() const noexcept { return capacity_; }

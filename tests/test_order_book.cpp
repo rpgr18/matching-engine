@@ -77,6 +77,12 @@ TYPED_TEST(OrderBookTest, LevelsAggregateOrdersAtTheSamePrice) {
   EXPECT_EQ(this->book.level_count(Side::Buy), 1u);
 }
 
+TYPED_TEST(OrderBookTest, DepthOfZeroLevelsIsEmpty) {
+  this->submit(buy(1, 100, 1));
+  EXPECT_TRUE(this->book.depth(Side::Buy, 0).empty());
+  EXPECT_EQ(this->book.depth(Side::Buy, 1).size(), 1u);
+}
+
 TYPED_TEST(OrderBookTest, DepthIsBestFirstOnBothSides) {
   this->submit(buy(1, 98, 1));
   this->submit(buy(2, 100, 2));

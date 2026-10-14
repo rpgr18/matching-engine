@@ -207,6 +207,7 @@ class OrderBook {
   /// The best `max_levels` levels of one side.
   [[nodiscard]] std::vector<LevelInfo> depth(Side side, std::size_t max_levels) const {
     std::vector<LevelInfo> out;
+    if (max_levels == 0) return out;
     for_each_level(side, [&](const LevelInfo& info) {
       out.push_back(info);
       return out.size() < max_levels;

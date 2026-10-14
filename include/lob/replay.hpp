@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <stdexcept>
 
 #include "lob/command.hpp"
 #include "lob/order.hpp"
@@ -31,12 +32,18 @@ struct ReplayOptions {
 template <class Book>
 void replay(Book& book, const Command* first, const Command* last, const ReplayOptions& opt = {}) {
   constexpr std::ptrdiff_t kChunk = 1024;
-  constexpr std::ptrdiff_t kRing = 64;  // must exceed order_distance - neighbour_distance
-  OrderIdx ring[kRing];
-  const std::ptrdiff_t n = last - first;
+  constexpr std::ptrdiff_t kRing = 64;  // holds stage-1 results until stage 2 reads them
   const std::ptrdiff_t ds = opt.slot_distance;
   const std::ptrdiff_t dor = opt.order_distance;
   const std::ptrdiff_t dn = opt.neighbour_distance;
+  // Each stage must run after the one before it for the same request, and stage 1's result must
+  // still be in the ring when stage 2 reads it.
+  if (!(0 < dn && dn <= dor && dor <= ds && dor - dn < kRing))
+    throw std::invalid_argument("replay: need 0 < neighbour <= order <= slot distance, and "
+                                "order - neighbour < 64");
+  OrderIdx ring[kRing];
+  for (OrderIdx& r : ring) r = kNil;
+  const std::ptrdiff_t n = last - first;
 
   for (std::ptrdiff_t base = 0; base < n; base += kChunk) {
     const std::ptrdiff_t stop = base + kChunk < n ? base + kChunk : n;

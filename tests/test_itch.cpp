@@ -206,6 +206,44 @@ TEST(Itch, RebuiltBooksMatchTheBooksThatProducedTheFeed) {
   EXPECT_EQ(cap.live_at_end, live);
 }
 
+TEST(Itch, SynthesizedFeedOmitsAddsTheBookRejected) {
+  // A stream that reuses a live order's id, including after that order was re-priced: the
+  // duplicate adds are rejected by the book and must not reach the feed.
+  Workload w;
+  w.spec.min_price = 1;
+  w.spec.max_price = 1000;
+  w.spec.target_depth = 100;
+  NewOrder a;
+  a.id = 5;
+  a.side = Side::Buy;
+  a.price = 100;
+  a.qty = 10;
+  w.commands.push_back(Command::add(a));
+  w.commands.push_back(Command::add(a));  // duplicate while live
+  w.commands.push_back(Command::modify(5, 99, 10));  // re-priced: new ITCH reference
+  w.commands.push_back(Command::add(a));  // duplicate again
+  NewOrder s = a;
+  s.id = 6;
+  s.side = Side::Sell;
+  s.price = 99;
+  s.qty = 4;
+  w.commands.push_back(Command::add(s));  // trades against the re-priced order
+
+  const SyntheticFeed feed = synthesize({w});
+  const Capacity cap = scan_capacity(feed.bytes.data(), feed.bytes.size());
+  EXPECT_EQ(cap.unknown_refs, 0u);
+  NullEngineListener none;
+  BookBuilder<> builder(none, cap);
+  ParseStats stats;
+  parse(feed.bytes.data(), feed.bytes.size(), builder, &stats);
+  EXPECT_EQ(builder.inconsistencies(), 0u);
+  EXPECT_EQ(stats.by_type[static_cast<int>('A')], 1u);
+  const auto& book = builder.engine().book(1);
+  ASSERT_EQ(book.order_count(), 1u);
+  EXPECT_EQ(test::resting(book, Side::Buy),
+            (std::vector<test::Resting>{{feed.ref_of[0].at(5), 99, 6}}));
+}
+
 TEST(Itch, MirrorsACrossedBookWithoutMatching) {
   Writer w;
   w.stock_directory(1, 1, "HALT");

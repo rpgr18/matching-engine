@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <stdexcept>
+#include <tuple>
 #include <vector>
 
 #include "lob/events.hpp"
@@ -46,6 +48,24 @@ TEST(Replay, PrefetchingNeverChangesResults) {
 
     EXPECT_EQ(pipelined(w, ReplayOptions{}), expected) << spec.name;
   }
+}
+
+TEST(Replay, RejectsLookaheadThatWouldReadOutOfOrderOrOutOfBounds) {
+  EventRecorder rec;
+  OrderBook<EventRecorder> book(BookConfig{}, rec);
+  for (auto [slot, order, neighbour] :
+       {std::tuple{16, 4, 10}, std::tuple{16, 10, -1}, std::tuple{16, 10, 0},
+        std::tuple{4, 10, 2}, std::tuple{100, 90, 2}}) {
+    ReplayOptions o;
+    o.slot_distance = slot;
+    o.order_distance = order;
+    o.neighbour_distance = neighbour;
+    EXPECT_THROW(replay(book, nullptr, nullptr, o), std::invalid_argument)
+        << slot << ',' << order << ',' << neighbour;
+  }
+  ReplayOptions edge;
+  edge.slot_distance = edge.order_distance = edge.neighbour_distance = 1;
+  EXPECT_NO_THROW(replay(book, nullptr, nullptr, edge));
 }
 
 TEST(Replay, HandlesEmptyAndTinyBatches) {

@@ -42,6 +42,11 @@ jobs:
           ./build/bench/lob_pipeline --cpus 1,2,3 \
             --json results/github-linux-x86-pipeline.json
 
+      - name: ITCH rebuild benchmark
+        run: |
+          ./build/tools/lob_itch synth synth.itch --symbols 16 --requests 1000000
+          ./build/tools/lob_itch replay synth.itch --book both --top 0 | tee results/github-linux-x86-itch.txt
+
       - uses: actions/upload-artifact@v4
         with:
           name: bench-results

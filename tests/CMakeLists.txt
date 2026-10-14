@@ -26,6 +26,7 @@ add_executable(lob_tests
   test_engine.cpp
   test_flat_order_map.cpp
   test_hierarchical_bitset.cpp
+  test_itch.cpp
   test_ladders.cpp
   test_order_book.cpp
   test_order_pool.cpp

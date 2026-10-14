@@ -1,0 +1,12 @@
+/build*/
+/out/
+/cmake-build-*/
+compile_commands.json
+.cache/
+.vscode/
+.idea/
+.DS_Store
+*.bin
+!tests/data/*.bin
+results/*.tmp
+__pycache__/

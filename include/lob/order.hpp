@@ -31,4 +31,22 @@ struct Order {
 
 static_assert(sizeof(Order) == 40, "Order layout is part of the cache budget; keep it compact");
 
+/// One price level: the FIFO of orders at that price plus running aggregates, so market data
+/// (total size, order count) never requires walking the queue.
+struct Level {
+  OrderIdx head = kNil;
+  OrderIdx tail = kNil;
+  std::uint32_t count = 0;
+  std::uint64_t total = 0;  ///< Sum of open quantity.
+};
+
+/// Read-only view of a level for queries and snapshots.
+struct LevelInfo {
+  Price price = 0;
+  std::uint64_t total = 0;
+  std::uint32_t count = 0;
+
+  friend bool operator==(const LevelInfo&, const LevelInfo&) = default;
+};
+
 }  // namespace lob

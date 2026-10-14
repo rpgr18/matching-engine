@@ -1,0 +1,69 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: linux-gcc, os: ubuntu-latest, cxx: g++ }
+          - { name: linux-clang, os: ubuntu-latest, cxx: clang++ }
+          - { name: macos-clang, os: macos-latest, cxx: clang++ }
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure
+        run: >
+          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_CXX_COMPILER=${{ matrix.cxx }} -DLOB_WERROR=ON
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+      - name: Benchmark smoke run
+        run: |
+          ./build/bench/lob_bench --requests 200000 --reps 1 --workload balanced,cancel-heavy,sweep-heavy
+          ./build/bench/lob_pipeline --requests 200000 --rates 1e6,max
+
+  sanitizers:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: asan-ubsan, sanitize: "address,undefined" }
+          - { name: tsan, sanitize: "thread" }
+    steps:
+      - uses: actions/checkout@v4
+
+      # -O1 without NDEBUG: sanitizers plus every assert() in the engine.
+      - name: Configure
+        run: >
+          cmake -B build -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DCMAKE_CXX_FLAGS_RELWITHDEBINFO="-O1 -g"
+          -DCMAKE_CXX_COMPILER=clang++ -DLOB_SANITIZE=${{ matrix.sanitize }}
+          -DLOB_BUILD_BENCH=OFF
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+        env:
+          LOB_FUZZ_OPS: "20000"

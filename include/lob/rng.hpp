@@ -6,7 +6,7 @@
 namespace lob {
 
 namespace detail {
-__extension__ using uint128 = unsigned __int128;
+__extension__ typedef unsigned __int128 uint128;
 }  // namespace detail
 
 /// xoshiro256++ (Blackman and Vigna), seeded through SplitMix64.

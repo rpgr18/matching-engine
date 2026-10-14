@@ -70,7 +70,7 @@ inline std::string place_current_thread(int cpu) {
   if (cpu < 0) return "unpinned";
   cpu_set_t set;
   CPU_ZERO(&set);
-  CPU_SET(cpu, &set);
+  CPU_SET(static_cast<std::size_t>(cpu), &set);
   if (pthread_setaffinity_np(pthread_self(), sizeof(set), &set) == 0)
     return "pinned to CPU " + std::to_string(cpu);
   return "pinning to CPU " + std::to_string(cpu) + " failed";

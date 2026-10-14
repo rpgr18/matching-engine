@@ -20,6 +20,7 @@ endif()
 include(GoogleTest)
 
 add_executable(lob_tests
+  test_flat_order_map.cpp
   test_order_pool.cpp
   test_types.cpp
 )

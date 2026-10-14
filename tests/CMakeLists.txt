@@ -20,6 +20,7 @@ endif()
 include(GoogleTest)
 
 add_executable(lob_tests
+  test_differential.cpp
   test_flat_order_map.cpp
   test_hierarchical_bitset.cpp
   test_ladders.cpp
@@ -29,4 +30,4 @@ add_executable(lob_tests
   test_types.cpp
 )
 target_link_libraries(lob_tests PRIVATE lob::lob lob_warnings GTest::gtest_main)
-gtest_discover_tests(lob_tests DISCOVERY_MODE PRE_TEST)
+gtest_discover_tests(lob_tests DISCOVERY_MODE PRE_TEST PROPERTIES TIMEOUT 300)

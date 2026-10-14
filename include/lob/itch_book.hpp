@@ -10,6 +10,7 @@
 // Books are sized from a first pass over the feed (scan_capacity), which finds each instrument's
 // peak number of live orders, so the second pass never allocates and never runs out.
 
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -36,11 +37,80 @@ struct Capacity {
 
 namespace detail {
 
+/// Live orders by reference, for the capacity scan: open addressing with linear probing and
+/// backward-shift deletion, like FlatOrderMap, but growable, since nobody knows a feed's peak in
+/// advance. Reference 0 is not a valid ITCH order reference and marks an empty slot.
+class LiveOrders {
+ public:
+  struct Slot {
+    std::uint64_t ref = 0;
+    std::uint32_t shares = 0;
+    std::uint16_t locate = 0;
+  };
+
+  LiveOrders() { rehash(1u << 16); }
+
+  [[nodiscard]] Slot* find(std::uint64_t ref) noexcept {
+    for (std::size_t i = home(ref);; i = (i + 1) & mask_) {
+      if (slots_[i].ref == ref) return &slots_[i];
+      if (slots_[i].ref == 0) return nullptr;
+    }
+  }
+
+  /// Returns false if `ref` is already live.
+  bool insert(std::uint64_t ref, std::uint16_t locate, std::uint32_t shares) {
+    if ((size_ + 1) * 2 > slots_.size()) rehash(slots_.size() * 2);
+    for (std::size_t i = home(ref);; i = (i + 1) & mask_) {
+      if (slots_[i].ref == ref) return false;
+      if (slots_[i].ref == 0) {
+        slots_[i] = Slot{ref, shares, locate};
+        ++size_;
+        return true;
+      }
+    }
+  }
+
+  void erase(Slot* slot) noexcept {
+    std::size_t hole = static_cast<std::size_t>(slot - slots_.data());
+    for (std::size_t j = (hole + 1) & mask_;; j = (j + 1) & mask_) {
+      if (slots_[j].ref == 0) break;
+      const std::size_t h = home(slots_[j].ref);
+      if (((j - h) & mask_) >= ((j - hole) & mask_)) {
+        slots_[hole] = slots_[j];
+        hole = j;
+      }
+    }
+    slots_[hole] = Slot{};
+    --size_;
+  }
+
+  [[nodiscard]] std::size_t size() const noexcept { return size_; }
+
+ private:
+  [[nodiscard]] std::size_t home(std::uint64_t ref) const noexcept {
+    return static_cast<std::size_t>((ref * 0x9E3779B97F4A7C15ull) >> shift_);
+  }
+
+  void rehash(std::size_t capacity) {
+    std::vector<Slot> old;
+    old.swap(slots_);
+    slots_.assign(capacity, Slot{});
+    mask_ = capacity - 1;
+    shift_ = 64 - std::countr_zero(capacity);
+    size_ = 0;
+    for (const Slot& s : old)
+      if (s.ref != 0) insert(s.ref, s.locate, s.shares);
+  }
+
+  std::vector<Slot> slots_;
+  std::size_t mask_ = 0;
+  int shift_ = 0;
+  std::size_t size_ = 0;
+};
+
 class CapacityScanner : public NullHandler {
  public:
   Capacity result;
-
-  CapacityScanner() { live_.reserve(1u << 20); }
 
   void on_add(const AddOrder& m) {
     count(m.h.locate);
@@ -60,21 +130,19 @@ class CapacityScanner : public NullHandler {
   }
   void on_replace(const OrderReplace& m) {
     count(m.h.locate);
-    const auto it = live_.find(m.old_ref);
-    if (it == live_.end()) {
+    LiveOrders::Slot* old = live_.find(m.old_ref);
+    if (old == nullptr || m.old_ref == 0) {
       ++result.unknown_refs;
       return;
     }
-    const std::uint16_t locate = it->second.first;
-    close(it);
+    const std::uint16_t locate = old->locate;
+    close(old);
     open(locate, m.new_ref, m.shares);
   }
 
   void finish() { result.live_at_end = live_.size(); }
 
  private:
-  using Live = std::unordered_map<std::uint64_t, std::pair<std::uint16_t, std::uint32_t>>;
-
   void grow(std::uint16_t locate) {
     if (result.peak_orders.size() <= locate) {
       result.peak_orders.resize(locate + std::size_t{1}, 0);
@@ -90,29 +158,29 @@ class CapacityScanner : public NullHandler {
 
   void open(std::uint16_t locate, std::uint64_t ref, std::uint32_t shares) {
     grow(locate);
-    if (!live_.emplace(ref, std::make_pair(locate, shares)).second) return;
+    if (ref == 0 || !live_.insert(ref, locate, shares)) return;
     if (++count_[locate] > result.peak_orders[locate]) result.peak_orders[locate] = count_[locate];
   }
 
   void shrink(std::uint64_t ref, std::uint32_t shares) {
-    const auto it = live_.find(ref);
-    if (it == live_.end()) {
+    LiveOrders::Slot* slot = ref == 0 ? nullptr : live_.find(ref);
+    if (slot == nullptr) {
       ++result.unknown_refs;
       return;
     }
-    if (shares >= it->second.second) {
-      close(it);
+    if (shares >= slot->shares) {
+      close(slot);
     } else {
-      it->second.second -= shares;
+      slot->shares -= shares;
     }
   }
 
-  void close(Live::iterator it) {
-    --count_[it->second.first];
-    live_.erase(it);
+  void close(LiveOrders::Slot* slot) {
+    --count_[slot->locate];
+    live_.erase(slot);
   }
 
-  Live live_;
+  LiveOrders live_;
   std::vector<std::uint32_t> count_;
 };
 

@@ -22,6 +22,7 @@ include(GoogleTest)
 add_executable(lob_tests
   test_flat_order_map.cpp
   test_hierarchical_bitset.cpp
+  test_ladders.cpp
   test_order_book.cpp
   test_order_pool.cpp
   test_self_trade.cpp

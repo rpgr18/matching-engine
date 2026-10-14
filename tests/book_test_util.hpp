@@ -1,10 +1,17 @@
 #pragma once
 
+#include <gtest/gtest.h>
+
+#include <string>
+#include <type_traits>
 #include <vector>
 
 #include "lob/events.hpp"
+#include "lob/map_ladder.hpp"
 #include "lob/messages.hpp"
 #include "lob/order.hpp"
+#include "lob/order_book.hpp"
+#include "lob/vector_ladder.hpp"
 
 namespace lob::test {
 
@@ -71,5 +78,21 @@ std::vector<Resting> resting(const Book& book, Side side) {
 inline std::ostream& operator<<(std::ostream& os, const Resting& r) {
   return os << '#' << r.id << ' ' << r.qty << '@' << r.price;
 }
+
+/// Every storage policy. Behavioural tests run once per policy; they must be indistinguishable.
+using AllBookTraits = ::testing::Types<DenseBookTraits, MapBookTraits, VectorBookTraits>;
+
+struct BookTraitsName {
+  template <class T>
+  static std::string GetName(int) {
+    if constexpr (std::is_same_v<T, DenseBookTraits>) {
+      return "Dense";
+    } else if constexpr (std::is_same_v<T, MapBookTraits>) {
+      return "Map";
+    } else {
+      return "Vector";
+    }
+  }
+};
 
 }  // namespace lob::test

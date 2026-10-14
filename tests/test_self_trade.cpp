@@ -14,6 +14,7 @@ using E = Event;
 constexpr OwnerId kAlice = 7;
 constexpr OwnerId kBob = 8;
 
+template <class Traits>
 struct StpBook {
   explicit StpBook(StpMode mode) : book(make_config(mode), rec) {}
 
@@ -32,31 +33,35 @@ struct StpBook {
   }
 
   EventRecorder rec;
-  OrderBook<EventRecorder> book;
+  OrderBook<EventRecorder, Traits> book;
 };
 
-TEST(SelfTrade, AllowedWhenDisabled) {
-  StpBook b(StpMode::None);
+template <class Traits>
+class SelfTrade : public ::testing::Test {};
+TYPED_TEST_SUITE(SelfTrade, AllBookTraits, BookTraitsName);
+
+TYPED_TEST(SelfTrade, AllowedWhenDisabled) {
+  StpBook<TypeParam> b(StpMode::None);
   b.submit(sell(1, 10, 5, kAlice));
   EXPECT_EQ(b.submit(buy(2, 10, 5, kAlice)),
             (Events{E::accept(2), E::trade(Trade{2, 1, 10, 5, 0, 0, Side::Buy}),
                     E::level(Side::Sell, 10, 0, 0)}));
 }
 
-TEST(SelfTrade, AnonymousOrdersAreNeverPrevented) {
-  StpBook b(StpMode::CancelBoth);
+TYPED_TEST(SelfTrade, AnonymousOrdersAreNeverPrevented) {
+  StpBook<TypeParam> b(StpMode::CancelBoth);
   b.submit(sell(1, 10, 5, 0));
   EXPECT_EQ(b.submit(buy(2, 10, 5, 0)).size(), 3u);  // accept, trade, level
 }
 
-TEST(SelfTrade, DifferentOwnersTradeNormally) {
-  StpBook b(StpMode::CancelBoth);
+TYPED_TEST(SelfTrade, DifferentOwnersTradeNormally) {
+  StpBook<TypeParam> b(StpMode::CancelBoth);
   b.submit(sell(1, 10, 5, kBob));
   EXPECT_EQ(b.submit(buy(2, 10, 5, kAlice)).size(), 3u);
 }
 
-TEST(SelfTrade, CancelRestingRemovesOwnOrdersAndKeepsMatching) {
-  StpBook b(StpMode::CancelResting);
+TYPED_TEST(SelfTrade, CancelRestingRemovesOwnOrdersAndKeepsMatching) {
+  StpBook<TypeParam> b(StpMode::CancelResting);
   b.submit(sell(1, 10, 5, kAlice));
   b.submit(sell(2, 10, 5, kBob));
   b.submit(sell(3, 11, 5, kAlice));
@@ -69,8 +74,8 @@ TEST(SelfTrade, CancelRestingRemovesOwnOrdersAndKeepsMatching) {
   EXPECT_EQ(b.book.best_bid(), 11);
 }
 
-TEST(SelfTrade, CancelAggressorStopsAtOwnOrderAndCancelsTheRemainder) {
-  StpBook b(StpMode::CancelAggressor);
+TYPED_TEST(SelfTrade, CancelAggressorStopsAtOwnOrderAndCancelsTheRemainder) {
+  StpBook<TypeParam> b(StpMode::CancelAggressor);
   b.submit(sell(1, 10, 2, kBob));
   b.submit(sell(2, 10, 5, kAlice));
   b.submit(sell(3, 10, 5, kBob));
@@ -81,15 +86,15 @@ TEST(SelfTrade, CancelAggressorStopsAtOwnOrderAndCancelsTheRemainder) {
   EXPECT_EQ(resting(b.book, Side::Sell), (std::vector<Resting>{{2, 10, 5}, {3, 10, 5}}));
 }
 
-TEST(SelfTrade, CancelAggressorAtHeadOfLevelReportsNoLevelChange) {
-  StpBook b(StpMode::CancelAggressor);
+TYPED_TEST(SelfTrade, CancelAggressorAtHeadOfLevelReportsNoLevelChange) {
+  StpBook<TypeParam> b(StpMode::CancelAggressor);
   b.submit(sell(1, 10, 5, kAlice));
   EXPECT_EQ(b.submit(buy(2, 10, 5, kAlice)),
             (Events{E::accept(2), E::cancel(2, 5, CancelReason::SelfTrade)}));
 }
 
-TEST(SelfTrade, CancelBothRemovesOneRestingOrderAndTheAggressor) {
-  StpBook b(StpMode::CancelBoth);
+TYPED_TEST(SelfTrade, CancelBothRemovesOneRestingOrderAndTheAggressor) {
+  StpBook<TypeParam> b(StpMode::CancelBoth);
   b.submit(sell(1, 10, 5, kAlice));
   b.submit(sell(2, 10, 5, kAlice));
   EXPECT_EQ(b.submit(buy(3, 10, 5, kAlice)),
@@ -98,8 +103,8 @@ TEST(SelfTrade, CancelBothRemovesOneRestingOrderAndTheAggressor) {
   EXPECT_EQ(resting(b.book, Side::Sell), (std::vector<Resting>{{2, 10, 5}}));
 }
 
-TEST(SelfTrade, AppliesToReplacedOrdersTradingOnTheWayIn) {
-  StpBook b(StpMode::CancelAggressor);
+TYPED_TEST(SelfTrade, AppliesToReplacedOrdersTradingOnTheWayIn) {
+  StpBook<TypeParam> b(StpMode::CancelAggressor);
   b.submit(buy(1, 9, 5, kAlice));
   b.submit(sell(2, 10, 5, kAlice));
   b.book.modify(1, 10, 5);
@@ -109,8 +114,8 @@ TEST(SelfTrade, AppliesToReplacedOrdersTradingOnTheWayIn) {
   EXPECT_EQ(b.book.order_count(), 1u);
 }
 
-TEST(SelfTrade, FokDoesNotCountLiquidityBehindOwnOrderWhenAggressorWouldStop) {
-  StpBook b(StpMode::CancelAggressor);
+TYPED_TEST(SelfTrade, FokDoesNotCountLiquidityBehindOwnOrderWhenAggressorWouldStop) {
+  StpBook<TypeParam> b(StpMode::CancelAggressor);
   b.submit(sell(1, 10, 2, kBob));
   b.submit(sell(2, 10, 5, kAlice));
   b.submit(sell(3, 10, 5, kBob));
@@ -119,8 +124,8 @@ TEST(SelfTrade, FokDoesNotCountLiquidityBehindOwnOrderWhenAggressorWouldStop) {
   EXPECT_EQ(b.book.order_count(), 3u) << "a killed FOK has no side effects";
 }
 
-TEST(SelfTrade, FokSkipsOwnOrdersWhenTheyWouldBeCancelled) {
-  StpBook b(StpMode::CancelResting);
+TYPED_TEST(SelfTrade, FokSkipsOwnOrdersWhenTheyWouldBeCancelled) {
+  StpBook<TypeParam> b(StpMode::CancelResting);
   b.submit(sell(1, 10, 2, kBob));
   b.submit(sell(2, 10, 5, kAlice));
   b.submit(sell(3, 10, 5, kBob));

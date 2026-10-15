@@ -111,14 +111,6 @@ code { font-family: var(--mono); font-size: 0.92em; }
 .col.left { flex: 0 0 290px; }
 .col.center { flex: 1 1 auto; }
 .col.right { flex: 0 0 330px; }
-.controls { grid-area: controls; }
-.stats { grid-area: stats; }
-.book { grid-area: book; }
-.ticket { grid-area: ticket; }
-.mine { grid-area: mine; }
-.tape { grid-area: tape; }
-.bench { grid-area: bench; }
-.real { grid-area: real; }
 
 .card {
   background: var(--surface);
@@ -384,31 +376,32 @@ footer {
   color: var(--muted);
 }
 
+/* Narrower screens: the left and centre stacks merge into one column (book right under the
+   controls) beside the ticket column, then everything becomes one column on phones. */
 @media (max-width: 1180px) {
-  .grid {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) 320px;
-    grid-template-areas:
-      "controls ticket"
-      "book     ticket"
-      "book     mine"
-      "stats    mine"
-      "tape     real"
-      "bench    real";
-    align-items: start;
-  }
-  .col { display: contents; }
+  .grid { display: grid; grid-template-columns: minmax(0, 1fr) 320px; align-items: start; }
+  .col.left, .col.center { display: contents; }
+  .controls, .book, .stats, .tape, .bench { grid-column: 1; }
+  .controls { order: 1; }
+  .book { order: 2; }
+  .stats { order: 3; }
+  .tape { order: 4; }
+  .bench { order: 5; }
+  .col.right { grid-column: 2; grid-row: 1 / span 5; }
 }
 
 @media (max-width: 760px) {
   .top { flex-direction: column; align-items: flex-start; padding: 20px 16px 8px; }
   .top nav { flex-wrap: wrap; }
-  .grid {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-areas: "controls" "book" "ticket" "mine" "stats" "tape" "bench" "real";
-    padding: 8px 16px 20px;
-    gap: 12px;
-  }
+  .grid { grid-template-columns: minmax(0, 1fr); padding: 8px 16px 20px; gap: 12px; }
+  .col.right { display: contents; }
+  .card { grid-column: 1; }
+  .ticket { order: 3; }
+  .mine { order: 4; }
+  .stats { order: 5; }
+  .tape { order: 6; }
+  .bench { order: 7; }
+  .real { order: 8; }
   .lrow { grid-template-columns: 40px 1fr 72px 1fr 40px; }
   .lrow > span { padding: 0 4px; }
   .lrow.head { font-size: 10px; letter-spacing: 0; }

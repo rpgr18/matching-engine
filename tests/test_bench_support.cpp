@@ -228,6 +228,52 @@ TEST(Workload, EveryCancelAndModifyTargetsALiveOrder) {
   }
 }
 
+TEST(FlowModel, StreamsAgainstABookSomeoneElseIsAlsoTrading) {
+  // The browser demo's situation: the model drives the book while a person adds, takes and
+  // cancels their own orders in between. The model must keep aiming only at its own live orders.
+  struct Listener {
+    FlowModel* model;
+    std::uint64_t unknown = 0;
+    void on_accept(OrderId) {}
+    void on_reject(OrderId, RejectReason r) { unknown += r == RejectReason::UnknownOrder; }
+    void on_trade(const Trade& t) { model->on_trade(t); }
+    void on_cancel(OrderId id, Qty, CancelReason) { model->on_cancel(id); }
+    void on_modify(OrderId, Price, Qty) {}
+    void on_level(Side, Price, std::uint64_t, std::uint32_t) {}
+  };
+  WorkloadSpec spec;
+  FlowModel model(spec);
+  Listener l{&model};
+  OrderBook<Listener> book(book_config_for(spec), l);
+  Rng person(42);
+  constexpr OrderId kPersonIds = OrderId{1} << 40;
+  std::vector<OrderId> mine;
+  for (int n = 0; n < 200'000; ++n) {
+    const Command c = model.next(book);
+    if (c.type != CommandType::Add) {
+      ASSERT_LT(c.id, kPersonIds) << "the model targeted someone else's order";
+      ASSERT_NE(book.find(c.id), nullptr) << "the model targeted an order that is gone";
+    }
+    apply(book, c);
+    model.applied(book, c);
+    if (n % 50 == 0) {  // the person acts
+      NewOrder o;
+      o.id = kPersonIds + static_cast<OrderId>(n);
+      o.side = person.chance(0.5) ? Side::Buy : Side::Sell;
+      const Price ref = model.reference_price();
+      o.price = ref + static_cast<Price>(person.below(21)) - 10;  // sometimes crossing
+      o.qty = static_cast<Qty>(1 + person.below(500));
+      book.add(o);
+      mine.push_back(o.id);
+      if (mine.size() > 20) {
+        book.cancel(mine.front());  // may already have filled; that is the person's business
+        mine.erase(mine.begin());
+      }
+    }
+  }
+  EXPECT_GT(model.live(), 1000u);
+}
+
 TEST(Workload, SettlesNearTargetDepth) {
   WorkloadSpec spec;
   spec.requests = 200'000;

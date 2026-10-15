@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Live Order Book</title>
+  <meta name="description" content="A C++20 limit order book and matching engine compiled to WebAssembly, running live in your browser.">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand">
+      <h1>matching-engine <span class="tag">live</span></h1>
+      <p>A C++20 limit order book and matching engine, compiled to WebAssembly and running in this
+        tab. The order flow is synthetic; the matching is the real engine. Trade against it.</p>
+    </div>
+    <nav>
+      <a href="https://github.com/rpgr18/matching-engine">Source</a>
+      <a href="https://github.com/rpgr18/matching-engine#performance">Benchmarks</a>
+      <a href="https://github.com/rpgr18/matching-engine#a-real-trading-day">NASDAQ replay</a>
+    </nav>
+  </header>
+
+  <main class="grid">
+    <div class="col left">
+    <section class="card controls" aria-labelledby="flow-h">
+      <h2 id="flow-h">Order flow</h2>
+      <div class="seg" role="radiogroup" aria-label="Flow profile" id="profile">
+        <button role="radio" aria-checked="true" data-profile="0">Balanced</button>
+        <button role="radio" aria-checked="false" data-profile="1">Cancel-heavy</button>
+        <button role="radio" aria-checked="false" data-profile="2">Sweep-heavy</button>
+      </div>
+      <p class="hint" id="profile-hint">Adds, cancels and takers in roughly the mix of a lit equity book.</p>
+      <label class="slider">
+        <span>Speed <output id="speed-out">300 requests/s</output></span>
+        <input type="range" id="speed" min="0" max="11" step="1" value="4" aria-describedby="speed-out">
+      </label>
+      <div class="row">
+        <button id="pause" class="btn">Pause</button>
+        <button id="step" class="btn" disabled>Step</button>
+        <button id="reset" class="btn ghost">Reset book</button>
+      </div>
+    </section>
+    <section class="card stats" aria-label="Engine statistics">
+      <div class="stat"><span class="k">Requests processed</span><span class="v" id="s-requests">0</span></div>
+      <div class="stat"><span class="k">Trades</span><span class="v" id="s-trades">0</span></div>
+      <div class="stat"><span class="k">Resting orders</span><span class="v" id="s-orders">0</span></div>
+      <div class="stat"><span class="k">Spread</span><span class="v" id="s-spread">–</span></div>
+      <div class="stat wide"><span class="k">Time per request in this tab, generating the flow included</span><span class="v" id="s-ns">–</span></div>
+    </section>
+    <section class="card tape" aria-labelledby="tape-h">
+      <h2 id="tape-h">Trades</h2>
+      <ul class="tape-list" id="tape"></ul>
+    </section>
+    </div>
+    <div class="col center">
+    <section class="card book" aria-labelledby="book-h">
+      <div class="card-head">
+        <h2 id="book-h">Order book</h2>
+        <span class="legend"><i class="sw bid"></i>Bids <i class="sw ask"></i>Asks <i class="sw you"></i>Your orders</span>
+      </div>
+      <div class="ladder" id="ladder" role="table" aria-label="Order book ladder">
+        <div class="lrow head" role="row">
+          <span role="columnheader">Orders</span><span role="columnheader">Bid size</span>
+          <span role="columnheader" class="c">Price</span>
+          <span role="columnheader">Ask size</span><span role="columnheader">Orders</span>
+        </div>
+      </div>
+      <p class="hint">Best 12 levels each side. Click a price to load it into the ticket.</p>
+    </section>
+    <section class="card bench" aria-labelledby="bench-h">
+      <h2 id="bench-h">Benchmark this browser</h2>
+      <p>Replays one million requests of balanced flow through two storage designs: this
+        project's dense ladder with a flat hash index, and the textbook <code>std::map</code> with
+        <code>std::unordered_map</code>. It's the same C++ as the native benchmark, here compiled to
+        WebAssembly, running on one thread in a background worker.</p>
+      <button class="btn primary" id="bench-run">Run benchmark</button>
+      <div class="bench-out" id="bench-out" aria-live="polite"></div>
+      <p class="hint">Native, on one Apple M2 Pro core: 56.2 M vs 18.1 M requests/s.</p>
+    </section>
+    </div>
+    <div class="col right">
+    <section class="card ticket" aria-labelledby="ticket-h">
+      <h2 id="ticket-h">Place an order</h2>
+      <form id="ticket" autocomplete="off">
+        <div class="seg side" role="radiogroup" aria-label="Side" id="side">
+          <button type="button" role="radio" aria-checked="true" data-side="0" class="buy">Buy</button>
+          <button type="button" role="radio" aria-checked="false" data-side="1" class="sell">Sell</button>
+        </div>
+        <div class="seg" role="radiogroup" aria-label="Order type" id="otype">
+          <button type="button" role="radio" aria-checked="true" data-type="limit">Limit</button>
+          <button type="button" role="radio" aria-checked="false" data-type="market">Market</button>
+        </div>
+        <div class="fields">
+          <label>Price ($)
+            <input id="price" type="number" step="0.01" min="0.01" inputmode="decimal" required>
+          </label>
+          <label>Shares
+            <input id="qty" type="number" step="1" min="1" value="100" inputmode="numeric" required>
+          </label>
+        </div>
+        <div class="row quick">
+          <button type="button" class="chip" data-fill="bid">Best bid</button>
+          <button type="button" class="chip" data-fill="mid">Mid</button>
+          <button type="button" class="chip" data-fill="ask">Best ask</button>
+        </div>
+        <div class="fields">
+          <label>Time in force
+            <select id="tif">
+              <option value="0" title="Good till cancelled: any unfilled remainder rests">GTC: rests</option>
+              <option value="1" title="Immediate or cancel: any unfilled remainder is cancelled">IOC: no rest</option>
+              <option value="2" title="Fill or kill: fills in full immediately or not at all">FOK: all or none</option>
+            </select>
+          </label>
+          <label class="check"><input type="checkbox" id="post"> Post-only</label>
+        </div>
+        <button type="submit" class="btn primary" id="submit">Buy 100</button>
+        <p class="result" id="result" role="status" aria-live="polite"></p>
+      </form>
+    </section>
+    <section class="card mine" aria-labelledby="mine-h">
+      <h2 id="mine-h">Your orders</h2>
+      <ul class="orders" id="orders"><li class="empty">No orders yet.</li></ul>
+      <h3>Activity</h3>
+      <ul class="log" id="activity"><li class="empty">Fills, cancels and rejects show up here.</li></ul>
+    </section>
+    <section class="card real" aria-labelledby="real-h">
+      <h2 id="real-h">Checked against a real trading day</h2>
+      <p>The same books, in mirroring mode, rebuilt every NASDAQ order book for 30 January 2019
+        from its public ITCH 5.0 feed.</p>
+      <dl class="facts">
+        <div><dt>Messages</dt><dd>368,366,634</dd></div>
+        <div><dt>Instruments</dt><dd>8,714</dd></div>
+        <div><dt>Inconsistencies</dt><dd>0</dd></div>
+        <div><dt>Executions at the front of the queue</dt><dd>99.914%</dd></div>
+        <div><dt>AAPL book, 15:59:59</dt><dd>165.21 × 165.23</dd></div>
+        <div><dt>NASDAQ closing cross</dt><dd>165.25</dd></div>
+      </dl>
+      <a href="https://github.com/rpgr18/matching-engine#a-real-trading-day">How it was checked</a>
+    </section>
+    </div>
+  </main>
+
+  <footer>
+    <span>Built by <a href="https://rpgr18.github.io/portfolio/">Ryan Greene</a></span>
+    <span id="engine-status">Loading the engine…</span>
+  </footer>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

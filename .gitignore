@@ -10,3 +10,7 @@ compile_commands.json
 !tests/data/*.bin
 results/*.tmp
 __pycache__/
+
+# browser demo build output (scripts/build_web.sh)
+/web/lob.mjs
+/web/lob.wasm

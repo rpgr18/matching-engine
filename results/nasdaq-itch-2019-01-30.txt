@@ -1,0 +1,93 @@
+01302019.NASDAQ_ITCH50: 11.25 GB; capacity scan 16.34 s: 8714 locates, 1903462 peak live orders summed over instruments, 0 unknown references
+parse only: 243.1 M messages/s (4.1 ns each), timing excludes disk reads
+
+sorted-vector ladder: 368366634 messages in 30.624 s = 12.0 M messages/s (83.1 ns each); books sized in 0.056 s
+  0 orders resting across 0 instruments at the end; 0 inconsistencies
+  symbol       messages  peak live |           best bid | best ask            resting
+  QQQ           3448973       7679 |                  - | -                         0
+  SPY           3055956       2985 |                  - | -                         0
+  IWM           1968160        538 |                  - | -                         0
+  AMD           1862837      15286 |                  - | -                         0
+  GOOG          1671883       7743 |                  - | -                         0
+  AAPL          1656597      42774 |                  - | -                         0
+  MSFT          1642525      22116 |                  - | -                         0
+  GOOGL         1634761       8769 |                  - | -                         0
+  SMH           1481132        417 |                  - | -                         0
+  AABA          1416715        953 |                  - | -                         0
+  NVDA          1310258      18558 |                  - | -                         0
+  EWZ           1308911        592 |                  - | -                         0
+  FB            1276526      20986 |                  - | -                         0
+  DIA           1254303        708 |                  - | -                         0
+  MU            1176316      11059 |                  - | -                         0
+
+sorted-vector + prefetching parse ladder: 368366634 messages in 25.528 s = 14.4 M messages/s (69.3 ns each); books sized in 0.019 s
+  0 orders resting across 0 instruments at the end; 0 inconsistencies
+
+std::map ladder: 368366634 messages in 43.801 s = 8.4 M messages/s (118.9 ns each); books sized in 0.022 s
+  0 orders resting across 0 instruments at the end; 0 inconsistencies
+  symbol       messages  peak live |           best bid | best ask            resting
+  QQQ           3448973       7679 |                  - | -                         0
+  SPY           3055956       2985 |                  - | -                         0
+  IWM           1968160        538 |                  - | -                         0
+  AMD           1862837      15286 |                  - | -                         0
+  GOOG          1671883       7743 |                  - | -                         0
+  AAPL          1656597      42774 |                  - | -                         0
+  MSFT          1642525      22116 |                  - | -                         0
+  GOOGL         1634761       8769 |                  - | -                         0
+  SMH           1481132        417 |                  - | -                         0
+  AABA          1416715        953 |                  - | -                         0
+  NVDA          1310258      18558 |                  - | -                         0
+  EWZ           1308911        592 |                  - | -                         0
+  FB            1276526      20986 |                  - | -                         0
+  DIA           1254303        708 |                  - | -                         0
+  MU            1176316      11059 |                  - | -                         0
+
+  AAPL at 15:59:59.000 (42758 resting orders)
+          bid shares          bid | ask          ask shares      
+                 182     165.2100 | 165.2300     200             
+                2400     165.1500 | 165.2400     100             
+                 100     165.1400 | 165.2500     100             
+                5103     165.1300 | 165.2600     100             
+                 100     165.1200 | 165.2700     2400            
+
+  MSFT at 15:59:59.000 (22062 resting orders)
+          bid shares          bid | ask          ask shares      
+                 225     106.3000 | 106.3700     320             
+                 230     106.2800 | 106.3800     1186            
+                 150     106.2700 | 106.3900     1657            
+                3400     106.2600 | 106.4000     2481            
+                1630     106.2500 | 106.4100     3600            
+
+  AMZN at 15:59:59.000 (39021 resting orders)
+          bid shares          bid | ask          ask shares      
+                 200    1670.5700 | 1670.8500    10              
+                 100    1670.5100 | 1670.8600    1               
+                   5    1670.4300 | 1670.9000    1               
+                 400    1670.4200 | 1670.9500    4               
+                 100    1670.4000 | 1670.9800    6               
+
+  QQQ at 15:59:59.000 (7603 resting orders)
+          bid shares          bid | ask          ask shares      
+                8500     165.7600 | 165.7800     2200            
+               11487     165.7500 | 165.7900     2600            
+                9797     165.7400 | 165.8000     2000            
+                9800     165.7300 | 165.8100     7800            
+                2000     165.7200 | 165.8200     7200            
+
+verification (untimed replay):
+  inconsistencies: 0 (unknown references, rejects)
+  continuous trading, 09:30:01-15:59:59:
+    executions: 7990787; at the best price 100.000%; at the front of the best level 99.914%
+    order messages: 350208109; book crossed after 590 (0.0002%), locked after 65 (0.0000%)
+  outside continuous trading:
+    executions: 106208; at the best price 100.000%; at the front of the best level 99.800%
+    order messages: 12910106; book crossed after 8 (0.0001%), locked after 0 (0.0000%)
+  'C' executions (printed away from the order price, not checked): 158886
+  MSFT opening cross at 09:30:00.148: 500581 shares @ 104.6200
+  AAPL opening cross at 09:30:00.300: 770817 shares @ 163.2200
+  QQQ opening cross at 09:30:00.332: 68994 shares @ 163.4000
+  AMZN opening cross at 09:30:00.752: 42456 shares @ 1623.0000
+  MSFT closing cross at 16:00:00.531: 2606642 shares @ 106.3800
+  AAPL closing cross at 16:00:00.563: 2340937 shares @ 165.2500
+  QQQ closing cross at 16:00:00.591: 570261 shares @ 165.6800
+  AMZN closing cross at 16:00:00.764: 183741 shares @ 1670.4300

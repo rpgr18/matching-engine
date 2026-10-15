@@ -244,6 +244,36 @@ TEST(Itch, SynthesizedFeedOmitsAddsTheBookRejected) {
             (std::vector<test::Resting>{{feed.ref_of[0].at(5), 99, 6}}));
 }
 
+TEST(Itch, PrefetchingParseGivesIdenticalBooks) {
+  std::vector<Workload> streams;
+  for (WorkloadSpec spec : standard_workloads(20'000)) {
+    if (spec.target_depth > 100'000) {
+      spec.target_depth = 10'000;
+      spec.prefill = 10'000;
+    }
+    streams.push_back(generate(spec));
+  }
+  const SyntheticFeed feed = synthesize(streams);
+  const Capacity cap = scan_capacity(feed.bytes.data(), feed.bytes.size());
+  NullEngineListener none;
+  BookBuilder<> plain(none, cap);
+  BookBuilder<> ahead(none, cap);
+  ParseStats a, b;
+  EXPECT_EQ(parse(feed.bytes.data(), feed.bytes.size(), plain, &a), feed.bytes.size());
+  EXPECT_EQ(parse_prefetching(feed.bytes.data(), feed.bytes.size(), ahead, &b), feed.bytes.size());
+  EXPECT_EQ(a.messages, b.messages);
+  EXPECT_EQ(ahead.inconsistencies(), 0u);
+  for (std::uint16_t l = 1; l <= streams.size(); ++l) {
+    for (Side side : {Side::Buy, Side::Sell})
+      EXPECT_EQ(test::resting(ahead.engine().book(l), side),
+                test::resting(plain.engine().book(l), side));
+  }
+  // An incomplete trailing message is left unconsumed, as parse() does.
+  const std::size_t cut = feed.bytes.size() - 7;
+  NullHandler ignore;
+  EXPECT_EQ(parse_prefetching(feed.bytes.data(), cut, ignore), parse(feed.bytes.data(), cut, ignore));
+}
+
 TEST(Itch, MirrorsACrossedBookWithoutMatching) {
   Writer w;
   w.stock_directory(1, 1, "HALT");

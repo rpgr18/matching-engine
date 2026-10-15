@@ -20,6 +20,7 @@ cmake -B build -G Ninja && cmake --build build && ctest --test-dir build
 | vs. `std::map` + `std::unordered_map` | 3.1× (balanced), 5.9× (1M orders) | 2.7× (balanced), 4.9× (1M orders) |
 | Gateway → engine → drop copy, 3 threads | 5 M requests/s sustained, p50 0.6 µs | 10 M requests/s sustained, p50 0.21 µs |
 | ITCH 5.0: rebuild 16 books from a feed | 26 M messages/s (decode alone: 261 M/s) | 22 M messages/s (decode alone: 318 M/s) |
+| ITCH 5.0: rebuild a real NASDAQ day (368M messages, 8,714 books) | **14.4 M messages/s**, whole day in 25.5 s; 99.91% of executions hit the front of the rebuilt queue | — |
 
 ¹ Apple silicon's counter ticks at 24 MHz, so each sample is a whole number of 41.67 ns ticks
 and a reading of 83 ns means the request took between 42 and 125 ns. Means are unbiased; the
@@ -433,19 +434,83 @@ would still fail.
 | rebuild, sorted-vector ladder | 26.3 M messages/s (38 ns each) | 21.8 M messages/s (46 ns each) |
 | rebuild, `std::map` ladder | 23.7 M messages/s | 19.1 M messages/s |
 
+### A real trading day
+
 NASDAQ publishes full trading days of ITCH 5.0 at
-[emi.nasdaq.com](https://emi.nasdaq.com/ITCH/Nasdaq%20ITCH/). A day is about
-5 GB gzipped and a few hundred million messages. The results here have not
-been produced from one of those files yet; to run one:
+[emi.nasdaq.com](https://emi.nasdaq.com/ITCH/Nasdaq%20ITCH/). The day used here
+is **30 January 2019**: 4.76 GB gzipped, 11.25 GB raw, 368,366,634 messages
+across 8,714 instruments, with 1.9 million orders live at the busiest point
+summed over instruments. The full output is in
+[`results/nasdaq-itch-2019-01-30.txt`](results/nasdaq-itch-2019-01-30.txt);
+the data file itself is not in the repository.
+
+**Consistency.** Every reference the feed used resolved: zero unknown
+references and zero rejects across the whole day. Every order the feed added,
+it also removed, so every book ends the day empty.
+
+**Checks against NASDAQ's own rules.** NASDAQ matches displayed orders in
+price-time priority, and its displayed book never stays crossed, because a
+crossing order would have matched. If the rebuild were wrong, these would
+fail. During continuous trading (09:30:01–15:59:59):
+
+| check | result |
+|---|---|
+| executions (`E`) at the best price on their side of the rebuilt book | **100.000%** of 7,990,787 |
+| ...at the front of that level's queue | **99.914%** |
+| order messages after which a rebuilt book is crossed | 590 of 350,208,109 (0.0002%) |
+| ...locked | 65 (0.00002%) |
+
+I haven't yet attributed the 0.086% of executions that hit an order behind
+the front of its queue, or the 590 crossed moments. Both are small enough to
+be special cases, such as order types with their own priority rules, or
+halted instruments.
+
+**Checks against the outside world.** The feed carries NASDAQ's official
+auction prints. A 15:59:59 snapshot of the rebuilt books, one second before
+the close, sits right where those prints and the public record say it should:
+
+| | rebuilt book at 15:59:59 (bid × ask) | NASDAQ closing cross | NASDAQ opening cross |
+|---|---|---|---|
+| AAPL | 165.21 × 165.23 | 165.25 (2.34M shares) | 163.22 |
+| MSFT | 106.30 × 106.37 | 106.38 | 104.62 |
+| AMZN | 1670.57 × 1670.85 | 1670.43 | 1623.00 |
+| QQQ | 165.76 × 165.78 | 165.68 | 163.40 |
+
+Yahoo Finance's split-adjusted history for AAPL that day (open 40.81, close
+41.31, before the 2020 four-for-one split) works out to an open of about
+$163.24 and a close of about $165.24. Those match NASDAQ's opening and
+closing crosses to within the rounding.
+
+**Speed** on the M2 Pro. An 11 GB file doesn't stay in a 16 GB machine's page
+cache, so a timed pass over a memory mapping measures the SSD. `--chunked`
+reads the file into memory 256 MB at a time and times only parsing and book
+work, which is how a live feed arrives:
+
+| | messages/s | ns per message | whole day |
+|---|---|---|---|
+| decode only | 243 M | 4.1 | 1.5 s |
+| rebuild, sorted-vector ladder | 12.0 M | 83 | 30.6 s |
+| rebuild, sorted-vector ladder, prefetching parse | **14.4 M** | **69** | **25.5 s** |
+| rebuild, `std::map` ladder | 8.4 M | 119 | 43.8 s |
+
+The real day is about half the speed of the synthetic feed. It spreads 1.9
+million live orders over 8,714 books, so most messages miss cache somewhere.
+`parse_prefetching()` attacks that the same way `replay()` does. Every order
+message carries its order reference at the same byte offset, so a scout 16
+messages ahead can prefetch that reference's index slot, and at 8 ahead can
+look the order up and prefetch it. That is worth +20% on the real day,
+whatever the distances. A third stage, also fetching the order's queue
+neighbours or an add's level tail, measured slower, so it isn't there. On
+the small synthetic feed, which is cache resident, prefetching is a loss.
+
+To reproduce:
 
 ```bash
 curl -O "https://emi.nasdaq.com/ITCH/Nasdaq%20ITCH/01302019.NASDAQ_ITCH50.gz"
 gunzip 01302019.NASDAQ_ITCH50.gz
-./build/tools/lob_itch replay 01302019.NASDAQ_ITCH50 --book both --top 20
+./build/tools/lob_itch replay 01302019.NASDAQ_ITCH50 --book both --chunked \
+    --verify --at 15:59:59 --symbols AAPL,MSFT,AMZN,QQQ
 ```
-
-`lob_itch` reports any message the books could not apply, such as an unknown
-reference or a reject. A consistent, complete day should report zero.
 
 ## Tools
 
@@ -475,9 +540,12 @@ lob> buy 7 120 @ 102 fok
   prefetch crossover.
 - `lob_pipeline`: the three-thread benchmark. Use `--rates`, `--batch`,
   `--symbols`, and `--cpus a,b,c` to pin on Linux.
-- `lob_itch replay|synth`: rebuilds every book from an ITCH 5.0 file (it
-  memory-maps the file, so a full day is fine), or writes a synthetic
-  multi-symbol feed from any workload profile.
+- `lob_itch replay|synth`: rebuilds every book from an ITCH 5.0 file, or
+  writes a synthetic multi-symbol feed from any workload profile. Options:
+  - `--chunked` times only parsing and book work, for files bigger than RAM;
+  - `--verify` checks execution priority and crossed books;
+  - `--at HH:MM:SS --symbols ...` snapshots chosen books and prints
+    NASDAQ's auction prints for them.
 
 ## Layout
 
@@ -534,8 +602,10 @@ locally.
   costs shown above.
 - **Order ids are unique among live orders only.** The book does not
   remember ids that have filled or been cancelled.
-- **The ITCH handler is verified on synthetic feeds,** which exercise every
-  order message type it decodes, but not yet on a full NASDAQ day.
+- **The ITCH handler has been run on one real NASDAQ day.** It decodes the
+  order-level messages only. Trades against hidden liquidity (`P`), auction
+  imbalance (`I`) and the rest are skipped, so the rebuilt books are
+  NASDAQ's displayed books.
 
 ## License
 

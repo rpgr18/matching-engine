@@ -19,6 +19,7 @@
 #include <utility>
 #include <vector>
 
+#include "lob/command.hpp"
 #include "lob/engine.hpp"
 #include "lob/itch.hpp"
 #include "lob/order_book.hpp"
@@ -111,6 +112,12 @@ class LiveOrders {
 class CapacityScanner : public NullHandler {
  public:
   Capacity result;
+
+  /// The capacity found so far; call once the whole feed has been parsed through the scanner.
+  Capacity finish_scan() {
+    finish();
+    return result;
+  }
 
   void on_add(const AddOrder& m) {
     count(m.h.locate);
@@ -206,6 +213,9 @@ struct RejectCounter {
 
 }  // namespace detail
 
+/// For feeding a scan in chunks: parse every chunk through it, then call finish_scan().
+using CapacityScanner = detail::CapacityScanner;
+
 /// First pass over a feed: replays only reference bookkeeping to find each instrument's peak
 /// number of simultaneously live orders.
 [[nodiscard]] inline Capacity scan_capacity(const std::uint8_t* data, std::size_t size) {
@@ -294,6 +304,35 @@ class BookBuilder : public NullHandler {
   // wrong object.
   BookBuilder(const BookBuilder&) = delete;
   BookBuilder& operator=(const BookBuilder&) = delete;
+
+  /// Lookahead hook for parse_prefetching(). Stage 0 fetches the index slot each order reference
+  /// hashes to (both references, for a replace); stage 1 looks the reference up, which is cheap
+  /// once stage 0 has landed, and fetches the order itself. A third stage that also fetched the
+  /// order's queue neighbours, or an add's level tail, measured slower on a full NASDAQ day: its
+  /// extra lookups and ladder searches cost more than the misses it hid.
+  void prefetch(int stage, const std::uint8_t* p, std::size_t len) const noexcept {
+    const char type = static_cast<char>(p[0]);
+    const bool add = type == kAddOrder || type == kAddOrderAttributed;
+    const bool touches_order = type == kOrderExecuted || type == kOrderExecutedWithPrice ||
+                               type == kOrderCancel || type == kOrderDelete ||
+                               type == kOrderReplace;
+    if ((!add && !touches_order) || len < message_length(type)) return;
+    const std::uint16_t locate = detail::be16(p + 1);
+    if (locate >= engine_.symbols()) return;
+    const auto& book = engine_.book(locate);
+    Command c;
+    c.id = detail::be64(p + 11);
+    c.type = add ? CommandType::Add : CommandType::Cancel;
+    if (stage == 0) {
+      book.prefetch_slot(c);
+      if (type == kOrderReplace) {
+        c.id = detail::be64(p + 19);
+        book.prefetch_slot(c);
+      }
+    } else if (!add) {
+      (void)book.prefetch_order(c);
+    }
+  }
 
   [[nodiscard]] const Engine& engine() const noexcept { return engine_; }
   [[nodiscard]] const std::string& name(std::uint16_t locate) const { return names_.at(locate); }

@@ -1,7 +1,10 @@
 // lob_itch: rebuild every order book from a NASDAQ TotalView-ITCH 5.0 file, or make a synthetic one.
 //
-//   lob_itch replay <file> [--book vector|map|both] [--top N]
+//   lob_itch replay <file> [--book vector|map|both] [--top N] [--chunked] [--no-rebuild]
 //                   [--verify] [--at HH:MM:SS] [--symbols A,B,...]
+//
+// --chunked reads the file into memory 256 MB at a time and times only parsing and book work,
+// for files too big to stay in the page cache.
 //   lob_itch synth <out> [--symbols K] [--requests N] [--workload NAME]
 //
 // --verify replays the feed once more, untimed, and checks the rebuilt books against two things
@@ -24,6 +27,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <exception>
 #include <numeric>
 #include <stdexcept>
@@ -43,7 +47,8 @@ using Clock = std::chrono::steady_clock;
 
 int usage() {
   std::fprintf(stderr,
-               "usage: lob_itch replay <file> [--book vector|map|both] [--top N]\n"
+               "usage: lob_itch replay <file> [--book vector|map|both] [--top N] [--chunked]\n"
+               "                       [--no-rebuild]\n"
                "                       [--verify] [--at HH:MM:SS] [--symbols A,B,...]\n"
                "       lob_itch synth <out> [--symbols K] [--requests N] [--workload NAME]\n");
   return 2;
@@ -94,17 +99,65 @@ std::string price(Price p) {
   return buf;
 }
 
-template <class Traits>
-void rebuild(const char* label, const Mapping& file, const itch::Capacity& cap, std::size_t top) {
+/// Feeds a file to a handler in chunks read into memory, timing only the handler's work. A feed
+/// bigger than RAM would otherwise be measured at disk speed: the timed loop would spend most of
+/// its time in page faults. A live feed arrives from the network into memory, so this is the
+/// number that describes the handler.
+template <bool Prefetch, class Handler>
+std::size_t parse_any(const std::uint8_t* data, std::size_t size, Handler& h,
+                      itch::ParseStats& stats) {
+  if constexpr (Prefetch) {
+    static const itch::Lookahead la = [] {
+      itch::Lookahead l;
+      // For tuning: LOB_ITCH_LOOKAHEAD="far,near".
+      if (const char* v = std::getenv("LOB_ITCH_LOOKAHEAD"))
+        std::sscanf(v, "%zu,%zu", &l.far, &l.near);
+      return l;
+    }();
+    return itch::parse_prefetching(data, size, h, &stats, la);
+  } else {
+    return itch::parse(data, size, h, &stats);
+  }
+}
+
+template <bool Prefetch = false, class Handler>
+double parse_in_chunks(const std::string& path, Handler& h, itch::ParseStats& stats) {
+  constexpr std::size_t kChunk = std::size_t{256} << 20;
+  std::vector<std::uint8_t> buf(kChunk);
+  std::FILE* f = std::fopen(path.c_str(), "rb");
+  if (!f) throw std::runtime_error("cannot open " + path);
+  double busy = 0;
+  std::size_t have = 0;
+  for (;;) {
+    const std::size_t got = std::fread(buf.data() + have, 1, kChunk - have, f);
+    have += got;
+    if (have == 0) break;
+    const auto t0 = Clock::now();
+    const std::size_t used = parse_any<Prefetch>(buf.data(), have, h, stats);
+    busy += seconds(t0, Clock::now());
+    std::memmove(buf.data(), buf.data() + used, have - used);
+    have -= used;
+    if (got == 0) break;  // end of file; any remainder is an incomplete message
+  }
+  std::fclose(f);
+  return busy;
+}
+
+template <class Traits, bool Prefetch = false>
+void rebuild(const char* label, const std::string& path, const Mapping& file,
+             const itch::Capacity& cap, std::size_t top, bool chunked) {
   itch::NullEngineListener none;
   const auto t0 = Clock::now();
   itch::BookBuilder<itch::NullEngineListener, Traits> builder(none, cap);
   const auto t1 = Clock::now();
   itch::ParseStats stats;
-  itch::parse(file.data(), file.size(), builder, &stats);
-  const auto t2 = Clock::now();
-
-  const double secs = seconds(t1, t2);
+  double secs = 0;
+  if (chunked) {
+    secs = parse_in_chunks<Prefetch>(path, builder, stats);
+  } else {
+    parse_any<Prefetch>(file.data(), file.size(), builder, stats);
+    secs = seconds(t1, Clock::now());
+  }
   std::size_t live = 0;
   std::size_t with_orders = 0;
   for (std::size_t s = 0; s < builder.instruments(); ++s) {
@@ -372,6 +425,7 @@ int replay(int argc, char** argv) {
   std::string book = "vector";
   std::size_t top = 10;
   bool check = false;
+  bool chunked = false;
   std::uint64_t at = 0;
   std::vector<std::string> symbols;
   for (int i = 3; i < argc; ++i) {
@@ -387,15 +441,27 @@ int replay(int argc, char** argv) {
       check = true;
     } else if (a == "--symbols" && i + 1 < argc) {
       symbols = split(argv[++i]);
+    } else if (a == "--chunked") {
+      chunked = true;
+    } else if (a == "--no-rebuild") {
+      book = "none";
     } else {
       return usage();
     }
   }
-  if (book != "vector" && book != "map" && book != "both") return usage();
+  if (book != "vector" && book != "map" && book != "both" && book != "none") return usage();
 
   const Mapping file(argv[2]);
   const auto t0 = Clock::now();
-  const itch::Capacity cap = itch::scan_capacity(file.data(), file.size());
+  itch::Capacity cap;
+  if (chunked) {
+    itch::CapacityScanner scanner;
+    itch::ParseStats ignored;
+    parse_in_chunks(argv[2], scanner, ignored);
+    cap = scanner.finish_scan();
+  } else {
+    cap = itch::scan_capacity(file.data(), file.size());
+  }
   const auto t1 = Clock::now();
   const auto peak = std::accumulate(cap.peak_orders.begin(), cap.peak_orders.end(),
                                     std::uint64_t{0});
@@ -416,17 +482,27 @@ int replay(int argc, char** argv) {
       void on_replace(const itch::OrderReplace& m) { sum += m.new_ref; }
     } touch;
     itch::ParseStats stats;
-    const auto p0 = Clock::now();
-    itch::parse(file.data(), file.size(), touch, &stats);
-    const auto p1 = Clock::now();
-    std::printf("parse only: %.1f M messages/s (%.1f ns each)%s\n",
-                static_cast<double>(stats.messages) / seconds(p0, p1) / 1e6,
-                seconds(p0, p1) * 1e9 / static_cast<double>(stats.messages),
-                touch.sum == 42 ? " " : "");
+    double secs = 0;
+    if (chunked) {
+      secs = parse_in_chunks(argv[2], touch, stats);
+    } else {
+      const auto p0 = Clock::now();
+      itch::parse(file.data(), file.size(), touch, &stats);
+      secs = seconds(p0, Clock::now());
+    }
+    std::printf("parse only: %.1f M messages/s (%.1f ns each)%s%s\n",
+                static_cast<double>(stats.messages) / secs / 1e6,
+                secs * 1e9 / static_cast<double>(stats.messages),
+                chunked ? ", timing excludes disk reads" : "", touch.sum == 42 ? " " : "");
   }
 
-  if (book == "vector" || book == "both") rebuild<VectorBookTraits>("sorted-vector", file, cap, top);
-  if (book == "map" || book == "both") rebuild<MapBookTraits>("std::map", file, cap, top);
+  if (book == "vector" || book == "both") {
+    rebuild<VectorBookTraits>("sorted-vector", argv[2], file, cap, top, chunked);
+    rebuild<VectorBookTraits, true>("sorted-vector + prefetching parse", argv[2], file, cap, 0,
+                                    chunked);
+  }
+  if (book == "map" || book == "both")
+    rebuild<MapBookTraits>("std::map", argv[2], file, cap, top, chunked);
   if (check) verify(file, cap, at, symbols);
   return 0;
 }

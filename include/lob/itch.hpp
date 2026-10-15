@@ -148,6 +148,7 @@ struct NullHandler {
   void on_delete(const OrderDelete&) {}
   void on_replace(const OrderReplace&) {}
   void on_other(char /*type*/, const std::uint8_t* /*body*/, std::size_t /*length*/) {}
+  void prefetch(int /*stage*/, const std::uint8_t* /*body*/, std::size_t /*length*/) const {}
 };
 
 // ---- Parsing ----------------------------------------------------------------------------------
@@ -265,6 +266,57 @@ std::size_t parse(const std::uint8_t* data, std::size_t size, Handler& h,
     pos += 2 + len;
   }
   return pos;
+}
+
+/// How far ahead of the message being dispatched each prefetch stage of parse_prefetching() runs.
+struct Lookahead {
+  std::size_t far = 16;
+  std::size_t near = 8;
+};
+
+/// Like parse(), with a software-pipelined lookahead for handlers whose work is dominated by cache
+/// misses. While message i is dispatched, the handler's prefetch(stage, body, length) is called
+/// for message i + far (stage 0) and i + near (stage 1), so it can start fetching, in dependency
+/// order, what those messages will touch. Every order message carries its order reference at the
+/// same offset, which is what makes looking ahead cheap. Results are identical to parse().
+template <class Handler>
+std::size_t parse_prefetching(const std::uint8_t* data, std::size_t size, Handler& h,
+                              ParseStats* stats = nullptr, Lookahead la = {}) {
+  constexpr std::size_t kRing = 64;
+  if (!(0 < la.near && la.near < la.far && la.far < kRing)) la = Lookahead{};
+  const std::size_t far = la.far;
+  std::size_t ring[kRing];  // offsets of messages found ahead of the one being dispatched
+  std::size_t scout = 0;    // byte offset of the next undiscovered message
+  std::size_t found = 0;    // messages discovered so far
+  auto discover = [&]() {
+    if (scout + 2 > size) return false;
+    const std::size_t len = detail::be16(data + scout);
+    if (scout + 2 + len > size) return false;
+    ring[found % kRing] = scout;
+    ++found;
+    h.prefetch(0, data + scout + 2, len);
+    scout += 2 + len;
+    return true;
+  };
+  for (std::size_t i = 0;; ++i) {
+    while (found <= i + far && discover()) {
+    }
+    if (i == found) break;
+    if (i + la.near < found) {
+      const std::size_t at = ring[(i + la.near) % kRing];
+      h.prefetch(1, data + at + 2, detail::be16(data + at));
+    }
+    const std::size_t at = ring[i % kRing];
+    const std::size_t len = detail::be16(data + at);
+    const std::uint8_t* body = data + at + 2;
+    const bool ok = dispatch(body, len, h);
+    if (stats) {
+      ++stats->messages;
+      stats->malformed += !ok;
+      if (len > 0 && body[0] < 128) ++stats->by_type[body[0]];
+    }
+  }
+  return scout;
 }
 
 // ---- Writing ----------------------------------------------------------------------------------

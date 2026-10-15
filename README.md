@@ -6,6 +6,11 @@ header-only and does no allocation on the request path. It has been checked
 against a reference model over tens of millions of random requests, and it is
 benchmarked, not just described as fast.
 
+**[Try it live in your browser →](https://rpgr18.github.io/matching-engine/)** The engine is
+compiled to WebAssembly and runs in the page: a live order book driven by synthetic flow that you
+can trade against, with your queue position shown as it moves, plus a benchmark that runs on your
+machine.
+
 ```bash
 cmake -B build -G Ninja && cmake --build build && ctest --test-dir build
 ./build/bench/lob_bench                       # throughput and per-request latency
@@ -547,6 +552,21 @@ lob> buy 7 120 @ 102 fok
   - `--at HH:MM:SS --symbols ...` snapshots chosen books and prints
     NASDAQ's auction prints for them.
 
+## Browser demo
+
+`web/` is a static page around the engine compiled to WebAssembly.
+`scripts/build_web.sh` builds `web/lob_wasm.cpp` with Emscripten into an 86 KB
+module with a small C interface. JavaScript reads depth, trades and events
+straight out of the module's memory. The order flow comes from the same
+`FlowModel` the benchmarks use, streaming one request at a time against the
+live book. Your orders get ids the model never targets, so they rest, trade
+and cancel like anyone else's. `.github/workflows/pages.yml` builds and
+publishes the page on every push. To run it locally:
+
+```bash
+scripts/build_web.sh && python3 -m http.server 8790 --directory web
+```
+
 ## Layout
 
 ```
@@ -566,6 +586,7 @@ include/lob/
 tests/                     unit, typed, differential and threaded tests; reference_book.hpp
 bench/                     lob_bench, lob_pipeline
 tools/                     lob_shell, lob_replay, lob_itch
+web/                       the browser demo: WebAssembly bindings, page, worker
 results/                   benchmark JSON from both machines
 scripts/                   mutation_check.py, plot_results.py
 ```

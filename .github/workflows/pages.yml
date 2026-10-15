@@ -1,0 +1,61 @@
+name: pages
+
+# Builds the browser demo (the engine compiled to WebAssembly) and publishes it to GitHub Pages.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "web/**"
+      - "include/**"
+      - "scripts/build_web.sh"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+env:
+  EMSDK_VERSION: "6.0.12"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Emscripten ${{ env.EMSDK_VERSION }}
+        run: |
+          git clone --depth 1 https://github.com/emscripten-core/emsdk.git "$RUNNER_TEMP/emsdk"
+          "$RUNNER_TEMP/emsdk/emsdk" install "$EMSDK_VERSION"
+          "$RUNNER_TEMP/emsdk/emsdk" activate "$EMSDK_VERSION"
+          echo "$RUNNER_TEMP/emsdk/upstream/emscripten" >> "$GITHUB_PATH"
+
+      - name: Build
+        run: scripts/build_web.sh
+
+      - name: Assemble the site
+        run: |
+          mkdir _site
+          cp web/index.html web/style.css web/app.js web/bench_worker.js web/lob.mjs web/lob.wasm _site/
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
